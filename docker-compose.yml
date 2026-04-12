@@ -1,0 +1,15 @@
+services:
+  opensearch:
+    image: opensearchproject/opensearch:2.18.0
+    container_name: lotus_elasticsearch
+    environment:
+      - discovery.type=single-node
+      - DISABLE_SECURITY_PLUGIN=true
+      - OPENSEARCH_INITIAL_ADMIN_PASSWORD=admin123!
+    ports:
+      - "9209:9200"
+    volumes:
+      - opensearch_data:/usr/share/opensearch/data
+
+volumes:
+  opensearch_data:
