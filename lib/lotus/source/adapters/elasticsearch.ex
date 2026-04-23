@@ -7,9 +7,17 @@ defmodule Lotus.Source.Adapters.Elasticsearch do
   alias Lotus.Elasticsearch.Introspection
   alias Lotus.Elasticsearch.QueryDSL
   alias Lotus.Elasticsearch.TypeMapper
+  alias Lotus.Query.Statement
   alias Lotus.Source.Adapter, as: AdapterStruct
 
-  # --- Resolution ---
+  @source_type :elasticsearch
+  @language "json:elasticsearch"
+
+  @supported_ops [:eq, :neq, :gt, :gte, :lt, :lte, :like, :is_null, :is_not_null, :in]
+
+  # ---------------------------------------------------------------------------
+  # Pluggable registration
+  # ---------------------------------------------------------------------------
 
   @impl true
   def can_handle?(entry) when is_atom(entry) and not is_nil(entry) do
@@ -43,43 +51,56 @@ defmodule Lotus.Source.Adapters.Elasticsearch do
         password: password,
         http_opts: build_http_opts(username, password)
       },
-      source_type: :elasticsearch
+      source_type: @source_type
     }
   end
 
   defp build_http_opts(nil, _), do: []
   defp build_http_opts(username, password), do: [username: username, password: password]
 
-  # --- Query Execution ---
+  # ---------------------------------------------------------------------------
+  # Query execution
+  # ---------------------------------------------------------------------------
 
   @impl true
-  def execute_query(state, query_json, _params, opts) do
+  def execute_query(state, text, _params, opts) do
     index = Keyword.get(opts, :index, "_all")
     timeout = Keyword.get(opts, :timeout, 15_000)
 
-    query = Jason.decode!(query_json)
+    with {:ok, query_map} <- QueryDSL.ensure_map(text),
+         {:ok, response} <-
+           Client.search(state.url, index, query_map, state.http_opts ++ [timeout: timeout]) do
+      {columns, rows} = hits_to_tabular(response)
+      result = %{columns: columns, rows: rows, num_rows: length(rows)}
 
-    case Client.search(state.url, index, query, state.http_opts ++ [timeout: timeout]) do
-      {:ok, response} ->
-        {columns, rows} = hits_to_tabular(response)
-        {:ok, %{columns: columns, rows: rows, num_rows: length(rows)}}
-
+      # Strategy A (inline count): when apply_pagination/3 set
+      # track_total_hits, ES returns an exact `hits.total.value` alongside
+      # the page. Surface it so core skips Strategy B.
+      case extract_total_hits(response, query_map) do
+        nil -> {:ok, result}
+        total -> {:ok, Map.put(result, :total_count, total)}
+      end
+    else
       {:error, %{status: status, body: body}} ->
-        message = extract_error_message(body)
-        {:error, "Elasticsearch Error (#{status}): #{message}"}
+        {:error, "Elasticsearch Error (#{status}): #{extract_error_message(body)}"}
 
       {:error, reason} when is_binary(reason) ->
         {:error, reason}
     end
   rescue
-    e in [Jason.DecodeError] ->
-      {:error, "Invalid JSON query: #{Exception.message(e)}"}
-
-    e ->
-      {:error, Exception.message(e)}
+    e -> {:error, Exception.message(e)}
   end
 
-  # --- Introspection ---
+  @impl true
+  def transaction(state, fun, _opts) when is_function(fun, 1) do
+    {:ok, fun.(state)}
+  rescue
+    e -> {:error, Exception.message(e)}
+  end
+
+  # ---------------------------------------------------------------------------
+  # Introspection
+  # ---------------------------------------------------------------------------
 
   @impl true
   def list_schemas(_state), do: {:ok, []}
@@ -91,28 +112,248 @@ defmodule Lotus.Source.Adapters.Elasticsearch do
   end
 
   @impl true
-  def get_table_schema(state, _schema, index) do
+  def describe_table(state, _schema, index) do
     columns = Introspection.get_index_mapping(state.url, index, state.http_opts)
     {:ok, columns}
   end
 
   @impl true
-  def resolve_table_schema(_state, _table, _schemas), do: {:ok, nil}
+  def resolve_table_namespace(_state, _table, _schemas), do: {:ok, nil}
 
-  # --- Identity ---
+  # ---------------------------------------------------------------------------
+  # Pipeline
+  # ---------------------------------------------------------------------------
 
   @impl true
-  def source_type(_state), do: :elasticsearch
+  def quote_identifier(_state, identifier), do: identifier
 
   @impl true
-  def query_language(_state), do: "json:elasticsearch"
+  def apply_filters(_state, %Statement{} = statement, []), do: statement
+
+  def apply_filters(_state, %Statement{} = statement, filters) do
+    {:ok, query_map} = QueryDSL.ensure_map(statement.text)
+    dsl_filters = Enum.map(filters, &filter_to_dsl/1)
+    %{statement | text: QueryDSL.inject_filters(query_map, dsl_filters)}
+  end
+
+  @impl true
+  def apply_sorts(_state, %Statement{} = statement, []), do: statement
+
+  def apply_sorts(_state, %Statement{} = statement, sorts) do
+    {:ok, query_map} = QueryDSL.ensure_map(statement.text)
+    dsl_sorts = Enum.map(sorts, &sort_to_dsl/1)
+    %{statement | text: QueryDSL.inject_sorts(query_map, dsl_sorts)}
+  end
+
+  @impl true
+  def apply_pagination(_state, %Statement{} = statement, opts) do
+    limit = Keyword.fetch!(opts, :limit)
+    offset = Keyword.get(opts, :offset, 0)
+    count = Keyword.get(opts, :count, :none)
+    {:ok, query_map} = QueryDSL.ensure_map(statement.text)
+
+    paged = QueryDSL.inject_pagination(query_map, offset, limit)
+
+    # Strategy A (inline count): when :exact is requested, enable ES's
+    # exact-total tracking on the main query and let execute_query/4 pull
+    # the number out of `hits.total.value`. No :count_spec; no second
+    # round-trip. See the Lotus source-adapters guide for the precedence
+    # rule (inline count wins over count_spec).
+    final_text =
+      case count do
+        :exact -> Map.put(paged, "track_total_hits", true)
+        _ -> paged
+      end
+
+    %{statement | text: final_text}
+  end
+
+  @impl true
+  def needs_preflight?(_state, _statement), do: true
+
+  @impl true
+  def query_plan(_state, _sql, _params, _opts) do
+    # ES has no plan source that's cheap AND useful AND production-safe:
+    # the Profile API carries real runtime overhead, `_search?explain` is
+    # scoring-only, and `_validate?explain=true`'s rewritten Lucene query
+    # tells the LLM nothing the statement + mapping don't already reveal.
+    # Returning `{:ok, nil}` tells the optimizer pipeline to review the
+    # statement and `describe_table/3` output directly.
+    {:ok, nil}
+  end
+
+  @impl true
+  def substitute_variable(_state, %Statement{} = statement, var_name, value, _type) do
+    with {:ok, query_map} <- QueryDSL.ensure_map(statement.text) do
+      {:ok, %{statement | text: QueryDSL.substitute_variable(query_map, var_name, value)}}
+    end
+  end
+
+  @impl true
+  def substitute_list_variable(state, %Statement{} = statement, var_name, values, type)
+      when is_list(values) do
+    substitute_variable(state, statement, var_name, values, type)
+  end
+
+  @impl true
+  def sanitize_query(_state, %Statement{} = statement, _opts) do
+    case QueryDSL.ensure_map(statement.text) do
+      {:ok, _} -> :ok
+      {:error, reason} -> {:error, reason}
+    end
+  end
+
+  @impl true
+  def transform_bound_query(_state, %Statement{} = statement, _opts), do: statement
+
+  @impl true
+  def transform_statement(_state, %Statement{} = statement), do: statement
+
+  # ---------------------------------------------------------------------------
+  # Visibility
+  # ---------------------------------------------------------------------------
+
+  @impl true
+  def extract_accessed_resources(_state, _statement) do
+    # Elasticsearch queries target indices via the HTTP URL, not the JSON body.
+    # Lotus cannot statically determine which indices a body will touch; the
+    # host app must opt in via `allow_unrestricted_resources: true` per-source
+    # or globally. Index-level security is enforced by ES itself.
+    {:unrestricted,
+     "Elasticsearch queries target indices via the HTTP URL; visibility " <>
+       "must be enforced at the index level (ES security / cluster permissions). " <>
+       "Set `allow_unrestricted_resources: true` in the source config to opt in."}
+  end
+
+  @impl true
+  def builtin_denies(_state) do
+    # Dot-prefixed indices are ES system indices (.kibana, .security, …).
+    [{nil, ~r/^\./}]
+  end
+
+  @impl true
+  def builtin_schema_denies(_state), do: []
+
+  @impl true
+  def default_schemas(_state), do: []
+
+  # ---------------------------------------------------------------------------
+  # Validation & identifier rules
+  # ---------------------------------------------------------------------------
+
+  @impl true
+  def validate_statement(state, %Statement{} = statement, _opts) do
+    with {:ok, query_map} <- QueryDSL.ensure_map(statement.text) do
+      validate_via_es(state, query_map)
+    end
+  end
+
+  @impl true
+  def parse_qualified_name(_state, name) when is_binary(name) do
+    # ES has a flat namespace — an index name is a single component. Dots are
+    # valid characters inside index names (e.g. "app.logs.2025-01"), so we do
+    # NOT split on ".".
+    {:ok, [name]}
+  end
+
+  @impl true
+  def validate_identifier(_state, :schema, _value), do: :ok
+
+  def validate_identifier(_state, :table, value) when is_binary(value) do
+    # Elasticsearch index name rules: lowercase, ≤ 255 bytes, cannot start with
+    # -, _, +, cannot contain \ / * ? " < > | space , # or :.
+    cond do
+      byte_size(value) == 0 ->
+        {:error, "index name cannot be empty"}
+
+      byte_size(value) > 255 ->
+        {:error, "index name exceeds 255 bytes"}
+
+      String.starts_with?(value, ["-", "_", "+"]) ->
+        {:error, "index name cannot start with -, _, or +"}
+
+      value != String.downcase(value) ->
+        {:error, "index name must be lowercase"}
+
+      Regex.match?(~r{[\\/*?"<>|\s,#:]}, value) ->
+        {:error, ~s(index name contains invalid character: \\ / * ? " < > | space , # :)}
+
+      true ->
+        :ok
+    end
+  end
+
+  def validate_identifier(_state, :column, value) when is_binary(value) do
+    # Field names: no control chars, no leading/trailing whitespace, no dots
+    # at path boundaries (dots inside are legal — nested field paths).
+    cond do
+      byte_size(value) == 0 -> {:error, "field name cannot be empty"}
+      value =~ ~r/\A\s|\s\z/ -> {:error, "field name cannot start or end with whitespace"}
+      value =~ ~r/[\x00-\x1f\x7f]/ -> {:error, "field name contains control characters"}
+      String.starts_with?(value, ".") -> {:error, "field name cannot start with ."}
+      String.ends_with?(value, ".") -> {:error, "field name cannot end with ."}
+      true -> :ok
+    end
+  end
+
+  @impl true
+  def supported_filter_operators(_state), do: @supported_ops
+
+  # ---------------------------------------------------------------------------
+  # Lifecycle
+  # ---------------------------------------------------------------------------
+
+  @impl true
+  def health_check(state) do
+    case Client.request(:get, state.url, "/", state.http_opts) do
+      {:ok, _} -> :ok
+      {:error, reason} -> {:error, reason}
+    end
+  end
+
+  @impl true
+  def disconnect(_state), do: :ok
+
+  # ---------------------------------------------------------------------------
+  # Errors
+  # ---------------------------------------------------------------------------
+
+  @impl true
+  def format_error(_state, %{status: status, body: body}) do
+    "Elasticsearch Error (#{status}): #{extract_error_message(body)}"
+  end
+
+  def format_error(_state, message) when is_binary(message), do: message
+  def format_error(_state, error), do: inspect(error)
+
+  @impl true
+  def handled_errors(_state), do: []
+
+  # ---------------------------------------------------------------------------
+  # Identity & presentation
+  # ---------------------------------------------------------------------------
+
+  @impl true
+  def source_type(_state), do: @source_type
 
   @impl true
   def supports_feature?(_state, :json), do: true
-  @impl true
   def supports_feature?(_state, :arrays), do: true
-  @impl true
   def supports_feature?(_state, _), do: false
+
+  @impl true
+  def query_language(_state), do: @language
+
+  @impl true
+  def limit_query(_state, statement, limit) when is_binary(statement) do
+    # Used for dropdown-option fetching. Caller passes a stringified JSON body.
+    case QueryDSL.ensure_map(statement) do
+      {:ok, map} -> map |> QueryDSL.inject_pagination(0, limit) |> Lotus.JSON.encode!()
+      {:error, _} -> statement
+    end
+  end
+
+  def limit_query(_state, statement, _limit), do: statement
 
   @impl true
   def hierarchy_label(_state), do: "Indices"
@@ -127,119 +368,102 @@ defmodule Lotus.Source.Adapters.Elasticsearch do
     Lotus.Source.Adapters.Elasticsearch.EditorConfig.config()
   end
 
-  # --- SQL Generation (adapted for JSON DSL) ---
-
-  @impl true
-  def quote_identifier(_state, identifier), do: identifier
-
-  @impl true
-  def param_placeholder(_state, _idx, _var, _type), do: ""
-
-  @impl true
-  def limit_offset_placeholders(_state, _limit_idx, _offset_idx), do: {"", ""}
-
-  @impl true
-  def apply_filters(_state, query_json, _params, filters) do
-    dsl_filters = Enum.map(filters, &to_dsl_filter/1)
-    {QueryDSL.inject_filters(query_json, dsl_filters), []}
-  end
-
-  @impl true
-  def apply_sorts(_state, query_json, sorts) do
-    dsl_sorts = Enum.map(sorts, &to_dsl_sort/1)
-    QueryDSL.inject_sorts(query_json, dsl_sorts)
-  end
-
-  @impl true
-  def explain_plan(_state, _query, _params, _opts) do
-    {:error, "EXPLAIN is not supported for Elasticsearch"}
-  end
-
-  # --- Safety & Visibility ---
-
-  @impl true
-  def builtin_denies(_state) do
-    # Deny dot-prefixed system indices
-    [{nil, ~r/^\./}]
-  end
-
-  @impl true
-  def builtin_schema_denies(_state), do: []
-
-  @impl true
-  def default_schemas(_state), do: []
-
-  # --- Transaction (no-op) ---
-
-  @impl true
-  def transaction(state, fun, _opts) do
-    {:ok, fun.(state)}
-  rescue
-    e -> {:error, Exception.message(e)}
-  end
-
-  # --- Error Handling ---
-
-  @impl true
-  def format_error(_state, %{status: status, body: body}) do
-    "Elasticsearch Error (#{status}): #{extract_error_message(body)}"
-  end
-
-  def format_error(_state, message) when is_binary(message), do: message
-  def format_error(_state, error), do: inspect(error)
-
-  @impl true
-  def handled_errors(_state), do: []
-
-  # --- Optional callbacks ---
-
-  @impl true
-  def sanitize_query(_state, query, _opts) do
-    case Jason.decode(query) do
-      {:ok, _} -> :ok
-      {:error, _} -> {:error, "Invalid JSON query"}
-    end
-  end
-
-  @impl true
-  def extract_accessed_resources(_state, _query, _params, _opts), do: :skip
-
-  @impl true
-  def apply_window(_state, query_json, params, opts) do
-    limit = Keyword.fetch!(opts, :limit)
-    offset = Keyword.get(opts, :offset, 0)
-
-    paged = QueryDSL.inject_pagination(query_json, offset, limit)
-
-    window_meta = %{
-      window: %{limit: limit, offset: offset},
-      total_count: nil,
-      total_mode: :none
-    }
-
-    {paged, params, window_meta}
-  end
-
-  @impl true
-  def limit_query(_state, query_json, limit) do
-    QueryDSL.inject_pagination(query_json, 0, limit)
-  end
-
-  @impl true
-  def health_check(state) do
-    case Client.request(:get, state.url, "/", state.http_opts) do
-      {:ok, _} -> :ok
-      {:error, reason} -> {:error, reason}
-    end
-  end
-
-  @impl true
-  def disconnect(_state), do: :ok
-
   @impl true
   def db_type_to_lotus_type(_state, db_type), do: TypeMapper.to_lotus_type(db_type)
 
-  # --- Private helpers ---
+  # ---------------------------------------------------------------------------
+  # AI context
+  # ---------------------------------------------------------------------------
+
+  @impl true
+  def ai_context(_state) do
+    {:ok,
+     %{
+       language: @language,
+       example_query: ~s|{"query": {"bool": {"filter": [{"term": {"status": {{status}}}}]}}}|,
+       syntax_notes:
+         "Queries are Elasticsearch Query DSL JSON objects. " <>
+           "Use `term` for exact match, `match` for analyzed text, `range` for numeric/date ranges, " <>
+           "`wildcard` for glob patterns. Wrap multiple clauses in `bool` with `must`/`filter`/`must_not`/`should`. " <>
+           "For variables: write `{{var_name}}` (no surrounding quotes) — the adapter inlines a JSON-encoded value, " <>
+           "so `{\"term\": {\"status\": {{status}}}}` becomes `{\"term\": {\"status\": \"active\"}}` at runtime. " <>
+           "Pagination uses `from`/`size`, not `LIMIT`/`OFFSET`. Aggregations go under `aggs`. " <>
+           "Optimization: prefer `bool.filter` over `bool.must` when scoring isn't needed " <>
+           "(filter context is cacheable and skips scoring). For exact-match string comparisons use " <>
+           "`term` on `.keyword` subfields, not `match` on analyzed `text` fields. Avoid deep `from:` " <>
+           "offsets past ~10k — switch to `search_after` with a consistent sort. Leading `*` in " <>
+           "`wildcard`/`regexp` queries is slow; an ngram analyzer at index time is the proper fix. " <>
+           "Watch aggregation cardinality — use `composite` aggs for high-cardinality `terms`. " <>
+           "Sorting and aggregating on a field requires `doc_values: true` in the mapping.",
+       error_patterns: [
+         %{
+           pattern: ~r/index_not_found_exception/,
+           hint: "The index does not exist. List available indices via list_tables."
+         },
+         %{
+           pattern: ~r/mapper_parsing_exception|illegal_argument_exception/,
+           hint:
+             "Field type mismatch or malformed query. Check the field mapping via describe_table."
+         },
+         %{
+           pattern: ~r/parsing_exception/,
+           hint:
+             "Query DSL is syntactically invalid. Ensure the JSON object matches ES Query DSL shape."
+         }
+       ],
+       capabilities: %{
+         generation: true,
+         optimization: true,
+         explanation: true
+       }
+     }}
+  end
+
+  @impl true
+  def prepare_for_analysis(_state, _statement) do
+    # Optimization pipeline needs a runnable statement after stripping [[...]]
+    # and neutralizing {{var}}. ES has no execution plan, so analysis is off.
+    {:error, :unsupported}
+  end
+
+  # ---------------------------------------------------------------------------
+  # Private helpers
+  # ---------------------------------------------------------------------------
+
+  defp validate_via_es(state, query_map) do
+    path = "/_validate/query?explain=false"
+
+    case Client.request(:post, state.url, path, state.http_opts ++ [json: query_map]) do
+      {:ok, %{body: %{"valid" => true}}} ->
+        :ok
+
+      {:ok, %{body: %{"valid" => false} = body}} ->
+        reason =
+          body
+          |> Map.get("explanations", [])
+          |> Enum.map_join("; ", fn e -> e["error"] || "invalid query" end)
+
+        {:error, if(reason == "", do: "Query is not valid", else: reason)}
+
+      {:error, %{status: status, body: body}} ->
+        {:error, "Elasticsearch Error (#{status}): #{extract_error_message(body)}"}
+
+      {:error, reason} when is_binary(reason) ->
+        {:error, reason}
+    end
+  end
+
+  # Extract the total-hit count from a search response ONLY when the caller's
+  # query asked for it via `track_total_hits: true`. Without that flag, ES
+  # caps the reported total at 10 000 and may return a `gte` relation — not a
+  # trustworthy exact count.
+  defp extract_total_hits(%{"hits" => %{"total" => %{"value" => v, "relation" => "eq"}}}, %{
+         "track_total_hits" => true
+       })
+       when is_integer(v),
+       do: v
+
+  defp extract_total_hits(_response, _query), do: nil
 
   defp hits_to_tabular(%{"hits" => %{"hits" => hits}}) when is_list(hits) and hits != [] do
     sources =
@@ -256,7 +480,7 @@ defmodule Lotus.Source.Adapters.Elasticsearch do
       Enum.map(sources, fn source ->
         Enum.map(all_keys, fn key ->
           case Map.get(source, key) do
-            v when is_map(v) or is_list(v) -> Jason.encode!(v)
+            v when is_map(v) or is_list(v) -> Lotus.JSON.encode!(v)
             v -> v
           end
         end)
@@ -265,14 +489,8 @@ defmodule Lotus.Source.Adapters.Elasticsearch do
     {columns, rows}
   end
 
-  defp hits_to_tabular(%{"hits" => %{"total" => _}}) do
-    {[], []}
-  end
-
-  defp hits_to_tabular(%{"aggregations" => aggs}) do
-    agg_to_tabular(aggs)
-  end
-
+  defp hits_to_tabular(%{"hits" => %{"total" => _}}), do: {[], []}
+  defp hits_to_tabular(%{"aggregations" => aggs}), do: agg_to_tabular(aggs)
   defp hits_to_tabular(_), do: {[], []}
 
   defp agg_to_tabular(aggs) do
@@ -310,9 +528,9 @@ defmodule Lotus.Source.Adapters.Elasticsearch do
   defp extract_error_message(body) when is_binary(body), do: body
   defp extract_error_message(body), do: inspect(body)
 
-  defp to_dsl_filter(%Lotus.Query.Filter{} = f),
+  defp filter_to_dsl(%Lotus.Query.Filter{} = f),
     do: %{column: f.column, op: f.op, value: f.value}
 
-  defp to_dsl_sort(%Lotus.Query.Sort{} = s),
+  defp sort_to_dsl(%Lotus.Query.Sort{} = s),
     do: %{column: s.column, direction: s.direction}
 end

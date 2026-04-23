@@ -22,8 +22,8 @@ defmodule Lotus.Elasticsearch.Integration.IntrospectionTest do
     assert Fixtures.users_index() in index_names
   end
 
-  test "get_table_schema returns field mappings", %{adapter: adapter} do
-    {:ok, columns} = Adapter.get_table_schema(adapter.state, nil, Fixtures.users_index())
+  test "describe_table returns field mappings", %{adapter: adapter} do
+    {:ok, columns} = Adapter.describe_table(adapter.state, nil, Fixtures.users_index())
     column_names = Enum.map(columns, & &1.name)
     assert "name" in column_names
     assert "email" in column_names

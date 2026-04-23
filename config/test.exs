@@ -7,4 +7,4 @@ config :lotus_elasticsearch, Lotus.Elasticsearch.Test.LotusRepo,
   database: ":memory:",
   pool_size: 1
 
-config :lotus, ecto_repo: Lotus.Elasticsearch.Test.LotusRepo
+config :lotus, storage_repo: Lotus.Elasticsearch.Test.LotusRepo
