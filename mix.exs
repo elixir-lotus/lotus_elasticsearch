@@ -15,7 +15,7 @@ defmodule Lotus.Elasticsearch.MixProject do
       aliases: aliases(),
       deps: deps(),
       package: package(),
-      description: description(),e
+      description: description(),
       source_url: @source_url,
       homepage_url: @source_url
     ]
