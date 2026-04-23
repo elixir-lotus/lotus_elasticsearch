@@ -7,9 +7,11 @@ defmodule Lotus.Source.Adapters.Elasticsearch do
   alias Lotus.Elasticsearch.Introspection
   alias Lotus.Elasticsearch.QueryDSL
   alias Lotus.Elasticsearch.TypeMapper
+  alias Lotus.Query.OptionalClause
   alias Lotus.Query.Statement
   alias Lotus.Source.Adapter, as: AdapterStruct
   alias Lotus.Source.Adapters.Elasticsearch.EditorConfig
+  alias Lotus.Variables
 
   @source_type :elasticsearch
   @language "json:elasticsearch"
@@ -244,7 +246,7 @@ defmodule Lotus.Source.Adapters.Elasticsearch do
 
   @impl true
   def validate_statement(state, %Statement{} = statement, _opts) do
-    with {:ok, query_map} <- QueryDSL.ensure_map(statement.text) do
+    with {:ok, query_map} <- QueryDSL.ensure_map(prepare_template(statement.text)) do
       validate_via_es(state, query_map)
     end
   end
@@ -381,13 +383,15 @@ defmodule Lotus.Source.Adapters.Elasticsearch do
     {:ok,
      %{
        language: @language,
-       example_query: ~s|{"query": {"bool": {"filter": [{"term": {"status": {{status}}}}]}}}|,
+       example_query: ~s|{"query": {"bool": {"filter": [{"term": {"status": "{{status}}"}}]}}}|,
        syntax_notes:
          ~s|Queries are Elasticsearch Query DSL JSON objects. | <>
            ~s|Use `term` for exact match, `match` for analyzed text, `range` for numeric/date ranges, | <>
            ~s|`wildcard` for glob patterns. Wrap multiple clauses in `bool` with `must`/`filter`/`must_not`/`should`. | <>
-           ~s|For variables: write `{{var_name}}` (no surrounding quotes) — the adapter inlines a JSON-encoded value, | <>
-           ~s|so `{"term": {"status": {{status}}}}` becomes `{"term": {"status": "active"}}` at runtime. | <>
+           ~s|For variables: always wrap `{{var_name}}` in surrounding quotes so the template is valid JSON — | <>
+           ~s|the adapter strips the quotes when inlining the JSON-encoded value, so | <>
+           ~s|`{"term": {"status": "{{status}}"}}` becomes `{"term": {"status": "active"}}` at runtime | <>
+           ~s|(integer/boolean values shed the surrounding quotes automatically). | <>
            ~s|Pagination uses `from`/`size`, not `LIMIT`/`OFFSET`. Aggregations go under `aggs`. | <>
            ~s|Optimization: prefer `bool.filter` over `bool.must` when scoring isn't needed | <>
            ~s|(filter context is cacheable and skips scoring). For exact-match string comparisons use | <>
@@ -421,15 +425,31 @@ defmodule Lotus.Source.Adapters.Elasticsearch do
   end
 
   @impl true
-  def prepare_for_analysis(_state, _statement) do
-    # Optimization pipeline needs a runnable statement after stripping [[...]]
-    # and neutralizing {{var}}. ES has no execution plan, so analysis is off.
-    {:error, :unsupported}
+  def prepare_for_analysis(_state, %Statement{text: text} = statement) when is_binary(text) do
+    {:ok, %{statement | text: prepare_template(text), params: []}}
+  end
+
+  def prepare_for_analysis(_state, %Statement{} = statement) do
+    # Map-typed text — already structurally "prepared"; just clear params.
+    {:ok, %{statement | params: []}}
   end
 
   # ---------------------------------------------------------------------------
   # Private helpers
   # ---------------------------------------------------------------------------
+
+  # Neutralize Lotus template syntax so the result is valid JSON without any
+  # values bound. Used by `validate_statement/3` and `prepare_for_analysis/2` —
+  # both inspect the statement without executing, so unresolved `{{var}}`
+  # placeholders and `[[...]]` optional blocks must be stripped before
+  # JSON-parsing. `null` is the JSON-native analogue of SQL's `NULL`.
+  defp prepare_template(text) when is_binary(text) do
+    text
+    |> OptionalClause.strip_brackets()
+    |> Variables.neutralize("null")
+  end
+
+  defp prepare_template(text), do: text
 
   defp validate_via_es(state, query_map) do
     path = "/_validate/query?explain=false"
