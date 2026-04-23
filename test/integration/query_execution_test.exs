@@ -19,7 +19,7 @@ defmodule Lotus.Elasticsearch.Integration.QueryExecutionTest do
   end
 
   test "executes match_all query", %{adapter: adapter, index: index} do
-    query = Jason.encode!(%{query: %{match_all: %{}}})
+    query = Lotus.JSON.encode!(%{query: %{match_all: %{}}})
 
     assert {:ok, result} = Adapter.execute_query(adapter.state, query, [], index: index)
     assert result.num_rows == 2
@@ -28,7 +28,7 @@ defmodule Lotus.Elasticsearch.Integration.QueryExecutionTest do
   end
 
   test "executes term query", %{adapter: adapter, index: index} do
-    query = Jason.encode!(%{query: %{term: %{active: true}}})
+    query = Lotus.JSON.encode!(%{query: %{term: %{active: true}}})
 
     assert {:ok, result} = Adapter.execute_query(adapter.state, query, [], index: index)
     assert result.num_rows == 1

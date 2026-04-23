@@ -1,43 +1,55 @@
 defmodule Lotus.Elasticsearch.QueryDSL do
   @moduledoc false
   # JSON query manipulation for Elasticsearch/OpenSearch.
+  #
+  # All functions operate on parsed maps. The adapter is responsible for
+  # decoding string queries to maps on the way in (via `ensure_map/1`) and
+  # encoding to JSON on the way out to the HTTP client.
 
-  def inject_filters(query_json, []), do: query_json
+  @doc "Parse a JSON string into a map, or return the map unchanged."
+  def ensure_map(query) when is_map(query), do: {:ok, query}
 
-  def inject_filters(query_json, filters) do
-    query_json
-    |> Jason.decode!()
-    |> do_inject_filters(filters)
-    |> Jason.encode!()
+  def ensure_map(query) when is_binary(query) do
+    case Lotus.JSON.decode(query) do
+      {:ok, parsed} when is_map(parsed) -> {:ok, parsed}
+      {:ok, _} -> {:error, "Query must be a JSON object"}
+      {:error, reason} -> {:error, "Invalid JSON: #{inspect(reason)}"}
+    end
   end
 
-  def inject_sorts(query_json, []), do: query_json
+  def ensure_map(_), do: {:error, "Query must be a JSON object or string"}
 
-  def inject_sorts(query_json, sorts) do
-    query_json
-    |> Jason.decode!()
-    |> Map.put("sort", Enum.map(sorts, &build_sort/1))
-    |> Jason.encode!()
+  def inject_filters(query_map, []) when is_map(query_map), do: query_map
+
+  def inject_filters(query_map, filters) when is_map(query_map) do
+    filter_clauses = Enum.map(filters, &build_filter/1)
+    existing_query = Map.get(query_map, "query", %{"match_all" => %{}})
+    Map.put(query_map, "query", wrap_in_bool(existing_query, filter_clauses))
   end
 
-  def inject_pagination(query_json, offset, limit) do
-    query_json
-    |> Jason.decode!()
-    |> Map.merge(%{"from" => offset, "size" => limit})
-    |> Jason.encode!()
+  def inject_sorts(query_map, []) when is_map(query_map), do: query_map
+
+  def inject_sorts(query_map, sorts) when is_map(query_map) do
+    Map.put(query_map, "sort", Enum.map(sorts, &build_sort/1))
   end
 
-  def extract_indices(_query_json), do: :all
+  def inject_pagination(query_map, offset, limit) when is_map(query_map) do
+    Map.merge(query_map, %{"from" => offset, "size" => limit})
+  end
+
+  @doc "Replace `{{var_name}}` occurrences anywhere in the map with the JSON-encoded value."
+  def substitute_variable(query_map, var_name, value) when is_map(query_map) do
+    encoded = Lotus.JSON.encode!(value)
+    marker = "{{#{var_name}}}"
+    # Round-trip through JSON to substitute in string leaves only.
+    query_map
+    |> Lotus.JSON.encode!()
+    |> String.replace("\"#{marker}\"", encoded)
+    |> String.replace(marker, encoded)
+    |> Lotus.JSON.decode!()
+  end
 
   # --- Private ---
-
-  defp do_inject_filters(query_map, filters) do
-    existing_query = Map.get(query_map, "query", %{"match_all" => %{}})
-    filter_clauses = Enum.map(filters, &build_filter/1)
-
-    bool_query = wrap_in_bool(existing_query, filter_clauses)
-    Map.put(query_map, "query", bool_query)
-  end
 
   defp wrap_in_bool(%{"bool" => bool}, filter_clauses) do
     existing_filter = Map.get(bool, "filter", [])
@@ -79,6 +91,9 @@ defmodule Lotus.Elasticsearch.QueryDSL do
 
   defp build_filter(%{column: col, op: :is_not_null}),
     do: %{"exists" => %{"field" => col}}
+
+  defp build_filter(%{column: col, op: :in, value: vals}) when is_list(vals),
+    do: %{"terms" => %{col => vals}}
 
   defp build_sort(%{column: col, direction: dir}),
     do: %{col => %{"order" => to_string(dir)}}
