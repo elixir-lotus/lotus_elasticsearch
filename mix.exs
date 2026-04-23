@@ -17,7 +17,8 @@ defmodule Lotus.Elasticsearch.MixProject do
       package: package(),
       description: description(),
       source_url: @source_url,
-      homepage_url: @source_url
+      homepage_url: @source_url,
+      dialyzer: dialyzer()
     ]
   end
 
@@ -37,7 +38,17 @@ defmodule Lotus.Elasticsearch.MixProject do
       {:lotus, github: "elixir-lotus/lotus", branch: "release/v1.0-prep"},
       {:req, "~> 0.5"},
       {:ecto_sqlite3, "~> 0.21", only: :test},
-      {:credo, "~> 1.7", only: [:dev, :test], runtime: false}
+      {:credo, "~> 1.7", only: [:dev, :test], runtime: false},
+      {:dialyxir, "~> 1.4", only: [:dev, :test], runtime: false}
+    ]
+  end
+
+  defp dialyzer do
+    [
+      plt_add_apps: [:ex_unit, :mix],
+      plt_file: {:no_warn, "priv/plts/lotus_elasticsearch.plt"},
+      plt_core_path: "priv/plts/core.plt",
+      flags: [:error_handling, :underspecs, :unknown, :unmatched_returns]
     ]
   end
 

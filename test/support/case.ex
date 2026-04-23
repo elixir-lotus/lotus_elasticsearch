@@ -1,4 +1,6 @@
 defmodule Lotus.Elasticsearch.Case do
+  @moduledoc false
+
   use ExUnit.CaseTemplate
 
   alias Lotus.Elasticsearch.Client

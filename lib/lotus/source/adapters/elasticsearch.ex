@@ -9,6 +9,7 @@ defmodule Lotus.Source.Adapters.Elasticsearch do
   alias Lotus.Elasticsearch.TypeMapper
   alias Lotus.Query.Statement
   alias Lotus.Source.Adapter, as: AdapterStruct
+  alias Lotus.Source.Adapters.Elasticsearch.EditorConfig
 
   @source_type :elasticsearch
   @language "json:elasticsearch"
@@ -365,7 +366,7 @@ defmodule Lotus.Source.Adapters.Elasticsearch do
 
   @impl true
   def editor_config(_state) do
-    Lotus.Source.Adapters.Elasticsearch.EditorConfig.config()
+    EditorConfig.config()
   end
 
   @impl true
@@ -382,19 +383,19 @@ defmodule Lotus.Source.Adapters.Elasticsearch do
        language: @language,
        example_query: ~s|{"query": {"bool": {"filter": [{"term": {"status": {{status}}}}]}}}|,
        syntax_notes:
-         "Queries are Elasticsearch Query DSL JSON objects. " <>
-           "Use `term` for exact match, `match` for analyzed text, `range` for numeric/date ranges, " <>
-           "`wildcard` for glob patterns. Wrap multiple clauses in `bool` with `must`/`filter`/`must_not`/`should`. " <>
-           "For variables: write `{{var_name}}` (no surrounding quotes) — the adapter inlines a JSON-encoded value, " <>
-           "so `{\"term\": {\"status\": {{status}}}}` becomes `{\"term\": {\"status\": \"active\"}}` at runtime. " <>
-           "Pagination uses `from`/`size`, not `LIMIT`/`OFFSET`. Aggregations go under `aggs`. " <>
-           "Optimization: prefer `bool.filter` over `bool.must` when scoring isn't needed " <>
-           "(filter context is cacheable and skips scoring). For exact-match string comparisons use " <>
-           "`term` on `.keyword` subfields, not `match` on analyzed `text` fields. Avoid deep `from:` " <>
-           "offsets past ~10k — switch to `search_after` with a consistent sort. Leading `*` in " <>
-           "`wildcard`/`regexp` queries is slow; an ngram analyzer at index time is the proper fix. " <>
-           "Watch aggregation cardinality — use `composite` aggs for high-cardinality `terms`. " <>
-           "Sorting and aggregating on a field requires `doc_values: true` in the mapping.",
+         ~s|Queries are Elasticsearch Query DSL JSON objects. | <>
+           ~s|Use `term` for exact match, `match` for analyzed text, `range` for numeric/date ranges, | <>
+           ~s|`wildcard` for glob patterns. Wrap multiple clauses in `bool` with `must`/`filter`/`must_not`/`should`. | <>
+           ~s|For variables: write `{{var_name}}` (no surrounding quotes) — the adapter inlines a JSON-encoded value, | <>
+           ~s|so `{"term": {"status": {{status}}}}` becomes `{"term": {"status": "active"}}` at runtime. | <>
+           ~s|Pagination uses `from`/`size`, not `LIMIT`/`OFFSET`. Aggregations go under `aggs`. | <>
+           ~s|Optimization: prefer `bool.filter` over `bool.must` when scoring isn't needed | <>
+           ~s|(filter context is cacheable and skips scoring). For exact-match string comparisons use | <>
+           ~s|`term` on `.keyword` subfields, not `match` on analyzed `text` fields. Avoid deep `from:` | <>
+           ~s|offsets past ~10k — switch to `search_after` with a consistent sort. Leading `*` in | <>
+           ~s|`wildcard`/`regexp` queries is slow; an ngram analyzer at index time is the proper fix. | <>
+           ~s|Watch aggregation cardinality — use `composite` aggs for high-cardinality `terms`. | <>
+           ~s|Sorting and aggregating on a field requires `doc_values: true` in the mapping.|,
        error_patterns: [
          %{
            pattern: ~r/index_not_found_exception/,
@@ -466,26 +467,9 @@ defmodule Lotus.Source.Adapters.Elasticsearch do
   defp extract_total_hits(_response, _query), do: nil
 
   defp hits_to_tabular(%{"hits" => %{"hits" => hits}}) when is_list(hits) and hits != [] do
-    sources =
-      Enum.map(hits, fn hit ->
-        Map.get(hit, "_source", %{})
-        |> Map.put("_id", hit["_id"])
-        |> Map.put("_index", hit["_index"])
-      end)
-
-    all_keys = sources |> Enum.flat_map(&Map.keys/1) |> Enum.uniq() |> Enum.sort()
-    columns = all_keys
-
-    rows =
-      Enum.map(sources, fn source ->
-        Enum.map(all_keys, fn key ->
-          case Map.get(source, key) do
-            v when is_map(v) or is_list(v) -> Lotus.JSON.encode!(v)
-            v -> v
-          end
-        end)
-      end)
-
+    sources = Enum.map(hits, &normalize_hit/1)
+    columns = sources |> Enum.flat_map(&Map.keys/1) |> Enum.uniq() |> Enum.sort()
+    rows = Enum.map(sources, &extract_row(&1, columns))
     {columns, rows}
   end
 
@@ -493,30 +477,43 @@ defmodule Lotus.Source.Adapters.Elasticsearch do
   defp hits_to_tabular(%{"aggregations" => aggs}), do: agg_to_tabular(aggs)
   defp hits_to_tabular(_), do: {[], []}
 
+  defp normalize_hit(hit) do
+    hit
+    |> Map.get("_source", %{})
+    |> Map.put("_id", hit["_id"])
+    |> Map.put("_index", hit["_index"])
+  end
+
+  defp extract_row(source, columns) do
+    Enum.map(columns, fn key -> encode_cell(Map.get(source, key)) end)
+  end
+
+  defp encode_cell(v) when is_map(v) or is_list(v), do: Lotus.JSON.encode!(v)
+  defp encode_cell(v), do: v
+
   defp agg_to_tabular(aggs) do
     case Enum.find(aggs, fn {_k, v} -> is_map(v) and Map.has_key?(v, "buckets") end) do
-      {_name, %{"buckets" => buckets}} when is_list(buckets) ->
-        columns = buckets |> List.first(%{}) |> Map.keys() |> Enum.sort()
+      {_name, %{"buckets" => buckets}} when is_list(buckets) -> buckets_to_tabular(buckets)
+      _ -> metrics_to_tabular(aggs)
+    end
+  end
 
-        rows =
-          Enum.map(buckets, fn bucket ->
-            Enum.map(columns, &Map.get(bucket, &1))
-          end)
+  defp buckets_to_tabular(buckets) do
+    columns = buckets |> List.first(%{}) |> Map.keys() |> Enum.sort()
+    rows = Enum.map(buckets, fn bucket -> Enum.map(columns, &Map.get(bucket, &1)) end)
+    {columns, rows}
+  end
 
-        {columns, rows}
+  defp metrics_to_tabular(aggs) do
+    columns = aggs |> Map.keys() |> Enum.sort()
+    values = Enum.map(columns, &extract_metric_value(aggs, &1))
+    {columns, [values]}
+  end
 
-      _ ->
-        columns = Map.keys(aggs) |> Enum.sort()
-
-        values =
-          Enum.map(columns, fn key ->
-            case aggs[key] do
-              %{"value" => v} -> v
-              v -> v
-            end
-          end)
-
-        {columns, [values]}
+  defp extract_metric_value(aggs, key) do
+    case aggs[key] do
+      %{"value" => v} -> v
+      v -> v
     end
   end
 

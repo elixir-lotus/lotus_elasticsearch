@@ -1,8 +1,8 @@
 defmodule Lotus.Elasticsearch.AdapterTest do
   use ExUnit.Case, async: true
 
-  alias Lotus.Source.Adapters.Elasticsearch, as: Adapter
   alias Lotus.Source.Adapter, as: AdapterStruct
+  alias Lotus.Source.Adapters.Elasticsearch, as: Adapter
 
   defmodule TestClient do
     use Lotus.Elasticsearch, otp_app: :lotus_elasticsearch
