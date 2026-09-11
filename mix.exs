@@ -36,7 +36,7 @@ defmodule Lotus.Elasticsearch.MixProject do
 
   defp deps do
     [
-      {:lotus, github: "elixir-lotus/lotus", branch: "main"},
+      {:lotus, "~> 1.0.0-rc.1"},
       {:req, "~> 0.5"},
       {:ecto_sqlite3, "~> 0.21", only: :test},
       {:credo, "~> 1.7", only: [:dev, :test], runtime: false},
