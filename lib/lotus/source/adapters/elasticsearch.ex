@@ -134,18 +134,18 @@ defmodule Lotus.Source.Adapters.Elasticsearch do
   def apply_filters(_state, %Statement{} = statement, []), do: statement
 
   def apply_filters(_state, %Statement{} = statement, filters) do
-    {:ok, query_map} = QueryDSL.ensure_map(statement.text)
+    {:ok, query_map} = QueryDSL.ensure_map(statement.body)
     dsl_filters = Enum.map(filters, &filter_to_dsl/1)
-    %{statement | text: QueryDSL.inject_filters(query_map, dsl_filters)}
+    %{statement | body: QueryDSL.inject_filters(query_map, dsl_filters)}
   end
 
   @impl true
   def apply_sorts(_state, %Statement{} = statement, []), do: statement
 
   def apply_sorts(_state, %Statement{} = statement, sorts) do
-    {:ok, query_map} = QueryDSL.ensure_map(statement.text)
+    {:ok, query_map} = QueryDSL.ensure_map(statement.body)
     dsl_sorts = Enum.map(sorts, &sort_to_dsl/1)
-    %{statement | text: QueryDSL.inject_sorts(query_map, dsl_sorts)}
+    %{statement | body: QueryDSL.inject_sorts(query_map, dsl_sorts)}
   end
 
   @impl true
@@ -153,7 +153,7 @@ defmodule Lotus.Source.Adapters.Elasticsearch do
     limit = Keyword.fetch!(opts, :limit)
     offset = Keyword.get(opts, :offset, 0)
     count = Keyword.get(opts, :count, :none)
-    {:ok, query_map} = QueryDSL.ensure_map(statement.text)
+    {:ok, query_map} = QueryDSL.ensure_map(statement.body)
 
     paged = QueryDSL.inject_pagination(query_map, offset, limit)
 
@@ -168,14 +168,14 @@ defmodule Lotus.Source.Adapters.Elasticsearch do
         _ -> paged
       end
 
-    %{statement | text: final_text}
+    %{statement | body: final_text}
   end
 
   @impl true
   def needs_preflight?(_state, _statement), do: true
 
   @impl true
-  def query_plan(_state, _sql, _params, _opts) do
+  def query_plan(_state, _statement, _opts) do
     # ES has no plan source that's cheap AND useful AND production-safe:
     # the Profile API carries real runtime overhead, `_search?explain` is
     # scoring-only, and `_validate?explain=true`'s rewritten Lucene query
@@ -187,8 +187,8 @@ defmodule Lotus.Source.Adapters.Elasticsearch do
 
   @impl true
   def substitute_variable(_state, %Statement{} = statement, var_name, value, _type) do
-    with {:ok, query_map} <- QueryDSL.ensure_map(statement.text) do
-      {:ok, %{statement | text: QueryDSL.substitute_variable(query_map, var_name, value)}}
+    with {:ok, query_map} <- QueryDSL.ensure_map(statement.body) do
+      {:ok, %{statement | body: QueryDSL.substitute_variable(query_map, var_name, value)}}
     end
   end
 
@@ -200,7 +200,7 @@ defmodule Lotus.Source.Adapters.Elasticsearch do
 
   @impl true
   def sanitize_query(_state, %Statement{} = statement, _opts) do
-    case QueryDSL.ensure_map(statement.text) do
+    case QueryDSL.ensure_map(statement.body) do
       {:ok, _} -> :ok
       {:error, reason} -> {:error, reason}
     end
@@ -246,7 +246,7 @@ defmodule Lotus.Source.Adapters.Elasticsearch do
 
   @impl true
   def validate_statement(state, %Statement{} = statement, _opts) do
-    with {:ok, query_map} <- QueryDSL.ensure_map(prepare_template(statement.text)) do
+    with {:ok, query_map} <- QueryDSL.ensure_map(prepare_template(statement.body)) do
       validate_via_es(state, query_map)
     end
   end
@@ -329,9 +329,6 @@ defmodule Lotus.Source.Adapters.Elasticsearch do
   def format_error(_state, message) when is_binary(message), do: message
   def format_error(_state, error), do: inspect(error)
 
-  @impl true
-  def handled_errors(_state), do: []
-
   # ---------------------------------------------------------------------------
   # Identity & presentation
   # ---------------------------------------------------------------------------
@@ -342,6 +339,9 @@ defmodule Lotus.Source.Adapters.Elasticsearch do
   @impl true
   def supports_feature?(_state, :json), do: true
   def supports_feature?(_state, :arrays), do: true
+  # A search returns shaped documents, not a flat column of values, so the
+  # UI asks the user to type dropdown options by hand.
+  def supports_feature?(_state, :dynamic_options), do: false
   def supports_feature?(_state, _), do: false
 
   @impl true
@@ -425,8 +425,8 @@ defmodule Lotus.Source.Adapters.Elasticsearch do
   end
 
   @impl true
-  def prepare_for_analysis(_state, %Statement{text: text} = statement) when is_binary(text) do
-    {:ok, %{statement | text: prepare_template(text), params: []}}
+  def prepare_for_analysis(_state, %Statement{body: text} = statement) when is_binary(text) do
+    {:ok, %{statement | body: prepare_template(text), params: []}}
   end
 
   def prepare_for_analysis(_state, %Statement{} = statement) do

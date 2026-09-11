@@ -1,0 +1,72 @@
+name: ci
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+jobs:
+  ci:
+    runs-on: ubuntu-latest
+
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - tuple:
+              elixir: "1.18"
+              erlang: "27.3.2"
+          - tuple:
+              elixir: "1.19"
+              erlang: "27.3.2"
+          - tuple:
+              elixir: "1.20"
+              erlang: "29.0.2"
+
+    env:
+      MIX_ENV: test
+
+    services:
+      opensearch:
+        image: opensearchproject/opensearch:2.18.0
+        ports:
+          - 9209:9200
+        env:
+          discovery.type: single-node
+          DISABLE_SECURITY_PLUGIN: "true"
+          OPENSEARCH_INITIAL_ADMIN_PASSWORD: "admin123!"
+        options: >-
+          --health-cmd "curl -f http://localhost:9200/_cluster/health || exit 1"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 10
+          --health-start-period 30s
+
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: erlef/setup-beam@v1
+        with:
+          elixir-version: ${{ matrix.tuple.elixir }}
+          otp-version: ${{ matrix.tuple.erlang }}
+
+      - uses: actions/cache@v5
+        with:
+          path: |
+            deps
+            _build
+          key: ${{ matrix.tuple.elixir }}-${{ matrix.tuple.erlang }}-${{ hashFiles('**/mix.lock') }}
+          restore-keys: |
+            ${{ matrix.tuple.elixir }}-${{ matrix.tuple.erlang }}-
+
+      - run: mix deps.get --only $MIX_ENV
+
+      - run: mix format --check-formatted
+
+      - run: mix deps.compile
+
+      - run: mix compile --warnings-as-errors
+
+      - run: mix credo --strict
+
+      - run: mix test
