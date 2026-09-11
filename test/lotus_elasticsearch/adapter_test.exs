@@ -1,6 +1,7 @@
 defmodule Lotus.Elasticsearch.AdapterTest do
   use ExUnit.Case, async: true
 
+  alias Lotus.Query.Statement
   alias Lotus.Source.Adapter, as: AdapterStruct
   alias Lotus.Source.Adapters.Elasticsearch, as: Adapter
 
@@ -77,15 +78,13 @@ defmodule Lotus.Elasticsearch.AdapterTest do
   end
 
   describe "sanitize_query/3" do
-    alias Lotus.Query.Statement
-
     test "accepts valid JSON" do
-      stmt = %Statement{adapter: Adapter, text: ~s({"query": {"match_all": {}}})}
+      stmt = %Statement{adapter: Adapter, body: ~s({"query": {"match_all": {}}})}
       assert :ok = Adapter.sanitize_query(%{}, stmt, [])
     end
 
     test "rejects invalid JSON" do
-      stmt = %Statement{adapter: Adapter, text: "not json"}
+      stmt = %Statement{adapter: Adapter, body: "not json"}
       assert {:error, reason} = Adapter.sanitize_query(%{}, stmt, [])
       assert reason =~ "Invalid JSON"
     end
@@ -132,29 +131,25 @@ defmodule Lotus.Elasticsearch.AdapterTest do
   end
 
   describe "extract_accessed_resources/2" do
-    alias Lotus.Query.Statement
-
     test "returns {:unrestricted, reason} since ES queries target indices via URL" do
-      stmt = %Statement{adapter: Adapter, text: %{"query" => %{"match_all" => %{}}}}
+      stmt = %Statement{adapter: Adapter, body: %{"query" => %{"match_all" => %{}}}}
       assert {:unrestricted, reason} = Adapter.extract_accessed_resources(%{}, stmt)
       assert reason =~ "Elasticsearch"
     end
   end
 
   describe "apply_pagination/3 (Strategy A inline count)" do
-    alias Lotus.Query.Statement
-
     test "count: :exact enables track_total_hits on the body" do
       stmt = %Statement{
         adapter: Adapter,
-        text: %{"query" => %{"match_all" => %{}}}
+        body: %{"query" => %{"match_all" => %{}}}
       }
 
       paged = Adapter.apply_pagination(%{}, stmt, limit: 10, offset: 0, count: :exact)
 
-      assert paged.text["track_total_hits"] == true
-      assert paged.text["from"] == 0
-      assert paged.text["size"] == 10
+      assert paged.body["track_total_hits"] == true
+      assert paged.body["from"] == 0
+      assert paged.body["size"] == 10
       # Strategy A — no count_spec plumbed through meta
       refute Map.has_key?(paged.meta, :count_spec)
     end
@@ -162,13 +157,42 @@ defmodule Lotus.Elasticsearch.AdapterTest do
     test "count: :none does NOT set track_total_hits (respects ES's default cap)" do
       stmt = %Statement{
         adapter: Adapter,
-        text: %{"query" => %{"match_all" => %{}}}
+        body: %{"query" => %{"match_all" => %{}}}
       }
 
       paged = Adapter.apply_pagination(%{}, stmt, limit: 10, offset: 0, count: :none)
 
-      refute Map.has_key?(paged.text, "track_total_hits")
+      refute Map.has_key?(paged.body, "track_total_hits")
       refute Map.has_key?(paged.meta, :count_spec)
+    end
+  end
+
+  describe "supports_feature?/2" do
+    test "supports JSON and arrays" do
+      assert Adapter.supports_feature?(%{}, :json)
+      assert Adapter.supports_feature?(%{}, :arrays)
+    end
+
+    test "does not offer query-populated dropdown options" do
+      refute Adapter.supports_feature?(%{}, :dynamic_options)
+    end
+
+    test "does not claim SQL-shaped features" do
+      refute Adapter.supports_feature?(%{}, :schema_hierarchy)
+      refute Adapter.supports_feature?(%{}, :search_path)
+      refute Adapter.supports_feature?(%{}, :make_interval)
+    end
+
+    test "answers false for unknown features" do
+      refute Adapter.supports_feature?(%{}, :something_we_never_heard_of)
+    end
+  end
+
+  describe "query_plan/3" do
+    test "reports that Elasticsearch offers no useful plan" do
+      stmt = %Statement{adapter: Adapter, body: %{"query" => %{"match_all" => %{}}}}
+
+      assert {:ok, nil} = Adapter.query_plan(%{}, stmt, [])
     end
   end
 

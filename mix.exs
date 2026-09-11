@@ -9,13 +9,14 @@ defmodule Lotus.Elasticsearch.MixProject do
       app: :lotus_elasticsearch,
       name: "Lotus Elasticsearch",
       version: @version,
-      elixir: "~> 1.17",
+      elixir: "~> 1.18",
       elixirc_paths: elixirc_paths(Mix.env()),
       start_permanent: Mix.env() == :prod,
       aliases: aliases(),
       deps: deps(),
       package: package(),
       description: description(),
+      docs: docs(),
       source_url: @source_url,
       homepage_url: @source_url,
       dialyzer: dialyzer()
@@ -35,11 +36,12 @@ defmodule Lotus.Elasticsearch.MixProject do
 
   defp deps do
     [
-      {:lotus, github: "elixir-lotus/lotus", branch: "release/v1.0-prep"},
+      {:lotus, github: "elixir-lotus/lotus", branch: "main"},
       {:req, "~> 0.5"},
       {:ecto_sqlite3, "~> 0.21", only: :test},
       {:credo, "~> 1.7", only: [:dev, :test], runtime: false},
-      {:dialyxir, "~> 1.4", only: [:dev, :test], runtime: false}
+      {:dialyxir, "~> 1.4", only: [:dev, :test], runtime: false},
+      {:ex_doc, "~> 0.34", only: :dev, runtime: false}
     ]
   end
 
@@ -56,13 +58,28 @@ defmodule Lotus.Elasticsearch.MixProject do
     ["test.setup": ["cmd docker compose up -d"]]
   end
 
+  defp docs do
+    [
+      main: "readme",
+      source_ref: "v#{@version}",
+      extras: ["README.md", "CHANGELOG.md"],
+      groups_for_modules: [
+        Adapter: [
+          Lotus.Elasticsearch,
+          Lotus.Source.Adapters.Elasticsearch,
+          ~r/Lotus\.Source\.Adapters\.Elasticsearch\..+/
+        ]
+      ]
+    ]
+  end
+
   defp package do
     [
       name: "lotus_elasticsearch",
       maintainers: ["Arda Can Tugay", "Rui Freitas"],
       licenses: ["MIT"],
       links: %{GitHub: @source_url},
-      files: ~w[lib .formatter.exs mix.exs README* LICENSE*]
+      files: ~w[lib .formatter.exs mix.exs README* CHANGELOG* LICENSE*]
     ]
   end
 
