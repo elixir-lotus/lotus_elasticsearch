@@ -159,4 +159,4 @@ Unit tests run without a cluster. The tests under `test/integration/` need the d
 
 ## License
 
-MIT — see [LICENSE](LICENSE).
+MIT — see [LICENSE](https://github.com/elixir-lotus/lotus_elasticsearch/blob/main/LICENSE).
