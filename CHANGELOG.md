@@ -5,9 +5,17 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [1.0.0] - Unreleased
+## [0.1.0] - 2026-09-12
 
 First release. Requires Lotus `~> 1.0`.
+
+This adapter was written while Lotus core was reworked to support non-SQL
+data sources, and it is the reference implementation for a source whose
+statements are not SQL text. It is complete against the v1 adapter contract
+and its test suite runs against a live cluster, but its own surface — the
+client macro, the configuration shape, the index and field mapping — has no
+production users yet, so it starts at 0.1.0 rather than claiming a stable
+API.
 
 ### Added
 
@@ -37,4 +45,4 @@ First release. Requires Lotus `~> 1.0`.
   runtime overhead, `_search?explain` is scoring-only, and
   `_validate?explain=true` reveals nothing the statement and mapping do not.
 
-[1.0.0]: https://github.com/elixir-lotus/lotus_elasticsearch/releases/tag/v1.0.0
+[0.1.0]: https://github.com/elixir-lotus/lotus_elasticsearch/releases/tag/v0.1.0
