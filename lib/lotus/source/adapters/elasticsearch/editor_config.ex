@@ -2,8 +2,8 @@ defmodule Lotus.Source.Adapters.Elasticsearch.EditorConfig do
   @moduledoc """
   Editor-side metadata for the Elasticsearch adapter.
 
-  `config/0` returns the `Lotus.Source.Adapter.editor_config/1` payload
-  declared by `Lotus.Source.Adapters.Elasticsearch.editor_config/1`.
+  `config/0` returns the payload the adapter hands back from
+  `c:Lotus.Source.Adapter.editor_config/1`.
   The map describes the Elasticsearch query DSL the way a code editor
   wants to see it:
 

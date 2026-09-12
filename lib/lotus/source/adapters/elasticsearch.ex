@@ -1,5 +1,42 @@
 defmodule Lotus.Source.Adapters.Elasticsearch do
-  @moduledoc false
+  @moduledoc """
+  `Lotus.Source.Adapter` implementation for Elasticsearch and OpenSearch.
+
+  Register it in `:source_adapters` and a cluster becomes a Lotus data
+  source, queryable from the same editor, dashboards and AI assistant as a
+  SQL database:
+
+      config :lotus,
+        source_adapters: [Lotus.Source.Adapters.Elasticsearch],
+        data_sources: %{"search" => MyApp.SearchClient}
+
+  A statement's body is the search request as a decoded JSON map rather
+  than SQL text, so filters, sorts and pagination rewrite the query DSL
+  structurally instead of wrapping it. `Lotus.Elasticsearch` defines the
+  client module that carries the connection, and the
+  [writing queries guide](writing-queries.html) covers the parts with no
+  SQL equivalent: variables inside a JSON body, optional clauses, and how
+  the pipeline callbacks edit the request.
+
+  Two behaviours differ from a SQL source and are deliberate:
+
+    * `extract_accessed_resources/2` always returns `{:unrestricted, _}`.
+      An Elasticsearch query names its indices in the request URL, not in
+      the body, so Lotus cannot tell from the statement what it will read.
+      Execution is blocked until an operator opts in with
+      `allow_unrestricted_resources`, having satisfied themselves that
+      cluster-level index permissions cover it.
+
+    * `query_plan/3` returns `{:ok, nil}`. No Elasticsearch plan source is
+      cheap, useful and production-safe at once: the Profile API carries
+      real runtime overhead, `_search?explain` is scoring-only, and
+      `_validate?explain=true` reveals nothing the statement and the
+      mapping do not already say.
+
+  The module is documented so adapter authors can read a complete non-SQL
+  implementation. Host applications configure it and otherwise go through
+  `Lotus`; the callbacks here are called by the Lotus pipeline.
+  """
 
   @behaviour Lotus.Source.Adapter
 
