@@ -1,15 +1,25 @@
 defmodule Lotus.Elasticsearch.Client do
   @moduledoc false
 
+  @finch Lotus.Elasticsearch.Finch
+
+  _ = Application.load(:req)
+
+  @finch_option if Version.match?(to_string(Application.spec(:req, :vsn)), ">= 0.7.4"),
+                  do: [name: @finch],
+                  else: @finch
+
+  @doc """
+  The Finch instance the adapter starts through `shared_children/0`.
+
+  Requests go through it when it is running and through Req's default
+  Finch otherwise, so the adapter works the same under a Lotus that does
+  not supervise source lifecycles.
+  """
+  def finch, do: @finch
+
   def request(method, base_url, path, opts \\ []) do
-    url = String.trim_trailing(base_url, "/") <> path
-
-    req_opts =
-      [method: method, url: url]
-      |> maybe_add_json(opts[:json])
-      |> maybe_add_auth(opts[:username], opts[:password])
-
-    case Req.request(req_opts) do
+    case Req.request(request_options(method, base_url, path, opts)) do
       {:ok, %Req.Response{status: status, body: body}} when status in 200..299 ->
         {:ok, %{status: status, body: body}}
 
@@ -42,6 +52,16 @@ defmodule Lotus.Elasticsearch.Client do
     end
   end
 
+  def request_options(method, base_url, path, opts) do
+    url = String.trim_trailing(base_url, "/") <> path
+
+    [method: method, url: url]
+    |> maybe_add_json(opts[:json])
+    |> maybe_add_auth(opts[:username], opts[:password])
+    |> maybe_add_receive_timeout(opts[:receive_timeout])
+    |> maybe_add_finch(Process.whereis(@finch))
+  end
+
   defp maybe_add_json(opts, nil), do: opts
   defp maybe_add_json(opts, json), do: Keyword.put(opts, :json, json)
 
@@ -50,4 +70,10 @@ defmodule Lotus.Elasticsearch.Client do
   defp maybe_add_auth(opts, username, password) do
     Keyword.put(opts, :auth, {:basic, "#{username}:#{password}"})
   end
+
+  defp maybe_add_receive_timeout(opts, nil), do: opts
+  defp maybe_add_receive_timeout(opts, timeout), do: Keyword.put(opts, :receive_timeout, timeout)
+
+  defp maybe_add_finch(opts, nil), do: opts
+  defp maybe_add_finch(opts, _pid), do: Keyword.put(opts, :finch, @finch_option)
 end

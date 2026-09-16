@@ -78,6 +78,39 @@ Lotus's canonical map form is `%{adapter: SomeModule, ...}`, which is used direc
 
 If you prefer the no-probing path, `%{adapter: Lotus.Source.Adapters.Elasticsearch, url: ...}` also works and lets you drop the `:source_adapters` entry — `wrap/2` reads the same `:url` / `:username` / `:password` keys either way.
 
+### Connection pool
+
+The adapter runs one `Finch` instance, `Lotus.Elasticsearch.Finch`, for
+every Elasticsearch source, and gives each source its own pool keyed by its
+URL. Lotus starts the Finch through the adapter's `shared_children/0` when
+the first Elasticsearch source appears and adds a source's pool through
+`source_started/2` when that source starts, so a source added at runtime
+gets a pool without a restart. Under a Lotus that does not supervise
+source lifecycles the adapter behaves as before: every request goes through
+Req's default Finch.
+
+Both configuration forms accept the same pool keys:
+
+| Key | Default | Meaning |
+|---|---|---|
+| `pool_size` | `10` | connections per pool |
+| `pool_count` | `1` | number of pools for the URL |
+| `connect_timeout` | `5000` | milliseconds to open a connection |
+| `receive_timeout` | `15000` | milliseconds to wait for a response; the `:timeout` option of a query overrides it |
+
+```elixir
+"search" => %{
+  adapter: :elasticsearch,
+  url: "http://localhost:9200",
+  pool_size: 25,
+  receive_timeout: 30_000
+}
+```
+
+A health check for a source that has no pool yet, for example a "test
+connection" before the source is saved, goes through the Finch's `:default`
+pool.
+
 ## Running a query
 
 ```elixir
@@ -117,7 +150,7 @@ Being explicit about the SQL-shaped things that are absent:
 - **No query-populated variable dropdowns.** `supports_feature?/2` answers `true` for `:json` and `:arrays` and `false` for everything else, `:dynamic_options` included — a search returns shaped documents rather than a flat column of values, so the UI asks for dropdown options by hand. It is also `false` for `:schema_hierarchy`, `:search_path` and `:make_interval`, none of which mean anything here.
 - **No static visibility analysis.** See below.
 - **No transactions.** `transaction/3` runs the function and returns its value; there is nothing to roll back.
-- **No connection pooling or supervision.** Each call is a one-shot `Req` HTTP request against the configured URL. `disconnect/1` is a no-op.
+- **No teardown on removal.** `disconnect/1` is a no-op. A removed source keeps its idle connections until Finch closes them.
 - **Aggregation results do not currently reach the result table.** The adapter has a path that turns bucket aggregations into rows (one row per bucket) and metric aggregations into a single row, but a real `_search` response carries `hits.total` even when `"size": 0`, and the hits branch claims the response first. Treat aggregations as unsupported in 0.1.0.
 
 ## Visibility

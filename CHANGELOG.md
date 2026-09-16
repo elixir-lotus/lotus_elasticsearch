@@ -5,6 +5,21 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- **One Finch per adapter with a pool per source URL.** The adapter
+  implements the Lotus source lifecycle callbacks: `shared_children/0`
+  starts `Lotus.Elasticsearch.Finch` once, and `source_started/2` adds a
+  pool for the source URL with `Finch.start_pool/3` when the source starts,
+  so sources added at runtime get their own pool. New source keys
+  `pool_size`, `pool_count`, `connect_timeout` and `receive_timeout` size
+  the pool and its timeouts; the `:timeout` query option overrides
+  `receive_timeout` per request. Every request names the adapter's Finch
+  when it is running and falls back to Req's default Finch otherwise, so
+  nothing changes under a Lotus that does not supervise source lifecycles.
+
 ## [0.1.0] - 2026-09-12
 
 First release. Requires Lotus `~> 1.0`.

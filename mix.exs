@@ -38,6 +38,7 @@ defmodule Lotus.Elasticsearch.MixProject do
     [
       {:lotus, "~> 1.0"},
       {:req, "~> 0.5"},
+      {:finch, "~> 0.20"},
       {:ecto_sqlite3, "~> 0.21", only: :test},
       {:credo, "~> 1.7", only: [:dev, :test], runtime: false},
       {:dialyxir, "~> 1.4", only: [:dev, :test], runtime: false},
