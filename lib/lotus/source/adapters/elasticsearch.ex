@@ -55,6 +55,13 @@ defmodule Lotus.Source.Adapters.Elasticsearch do
 
   @supported_ops [:eq, :neq, :gt, :gte, :lt, :lte, :like, :is_null, :is_not_null, :in]
 
+  @default_pool_size 10
+  @default_pool_count 1
+  @default_connect_timeout 5_000
+  @default_receive_timeout 15_000
+
+  @lifecycle_callbacks? {:shared_children, 0} in Lotus.Source.Adapter.behaviour_info(:callbacks)
+
   # ---------------------------------------------------------------------------
   # Pluggable registration
   # ---------------------------------------------------------------------------
@@ -81,6 +88,7 @@ defmodule Lotus.Source.Adapters.Elasticsearch do
     url = config[:url]
     username = config[:username]
     password = config[:password]
+    receive_timeout = config[:receive_timeout] || @default_receive_timeout
 
     %AdapterStruct{
       name: name,
@@ -89,14 +97,22 @@ defmodule Lotus.Source.Adapters.Elasticsearch do
         url: url,
         username: username,
         password: password,
-        http_opts: build_http_opts(username, password)
+        http_opts: build_http_opts(username, password, receive_timeout),
+        pool: %{
+          size: config[:pool_size] || @default_pool_size,
+          count: config[:pool_count] || @default_pool_count,
+          connect_timeout: config[:connect_timeout] || @default_connect_timeout
+        }
       },
       source_type: @source_type
     }
   end
 
-  defp build_http_opts(nil, _), do: []
-  defp build_http_opts(username, password), do: [username: username, password: password]
+  defp build_http_opts(nil, _password, receive_timeout), do: [receive_timeout: receive_timeout]
+
+  defp build_http_opts(username, password, receive_timeout) do
+    [username: username, password: password, receive_timeout: receive_timeout]
+  end
 
   # ---------------------------------------------------------------------------
   # Query execution
@@ -105,11 +121,9 @@ defmodule Lotus.Source.Adapters.Elasticsearch do
   @impl true
   def execute_query(state, text, _params, opts) do
     index = Keyword.get(opts, :index, "_all")
-    timeout = Keyword.get(opts, :timeout, 15_000)
 
     with {:ok, query_map} <- QueryDSL.ensure_map(text),
-         {:ok, response} <-
-           Client.search(state.url, index, query_map, state.http_opts ++ [timeout: timeout]) do
+         {:ok, response} <- Client.search(state.url, index, query_map, http_opts(state, opts)) do
       {columns, rows} = hits_to_tabular(response)
       result = %{columns: columns, rows: rows, num_rows: length(rows)}
 
@@ -353,6 +367,29 @@ defmodule Lotus.Source.Adapters.Elasticsearch do
 
   @impl true
   def disconnect(_state), do: :ok
+
+  if @lifecycle_callbacks?, do: @impl(true)
+
+  def shared_children do
+    [{Finch, name: Client.finch(), pools: %{default: [size: @default_pool_size]}}]
+  end
+
+  if @lifecycle_callbacks?, do: @impl(true)
+
+  def source_started(_name, %{url: url, pool: pool}) do
+    Finch.start_pool(Client.finch(), Finch.Pool.new(url),
+      size: pool.size,
+      count: pool.count,
+      conn_opts: [transport_opts: [timeout: pool.connect_timeout]]
+    )
+  end
+
+  defp http_opts(state, opts) do
+    case Keyword.fetch(opts, :timeout) do
+      {:ok, timeout} -> Keyword.put(state.http_opts, :receive_timeout, timeout)
+      :error -> state.http_opts
+    end
+  end
 
   # ---------------------------------------------------------------------------
   # Errors
