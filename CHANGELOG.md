@@ -9,6 +9,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Index sizes for `table_row_estimates/2`.** Each index's document count
+  comes from `_cat/indices` in one request. Lotus's `table_row_estimates/2`
+  and the MCP server's `list_tables` (`approx_rows`) show it, so a model
+  can tell large indices from small ones. The count includes nested
+  documents, so it overestimates top-level documents. Closed and hidden
+  indices are left out. This requires the Lotus that adds the callback
+  (elixir-lotus/lotus#324); until that is released, the dependency points
+  at Lotus `main` on GitHub.
+
 - **One Finch per adapter with a pool per source URL.** The adapter
   implements the Lotus source lifecycle callbacks: `shared_children/0`
   starts `Lotus.Elasticsearch.Finch` once, and `source_started/2` adds a

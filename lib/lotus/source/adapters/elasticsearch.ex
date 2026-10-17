@@ -174,6 +174,12 @@ defmodule Lotus.Source.Adapters.Elasticsearch do
   @impl true
   def resolve_table_namespace(_state, _table, _schemas), do: {:ok, nil}
 
+  # Each index's document count from _cat/indices: one request for every
+  # index, no search.
+  @impl true
+  def table_row_estimates(state, _schemas),
+    do: Introspection.index_doc_counts(state.url, state.http_opts)
+
   # ---------------------------------------------------------------------------
   # Pipeline
   # ---------------------------------------------------------------------------
