@@ -16,6 +16,41 @@ defmodule Lotus.Elasticsearch.Introspection do
     end
   end
 
+  @doc """
+  Each index's document count, as `{nil, index} => count`, for the indices
+  `list_indices/2` lists.
+  """
+  def index_doc_counts(base_url, opts \\ []) do
+    with {:ok, indices} <- Client.list_indices(base_url, opts), do: {:ok, doc_counts(indices)}
+  end
+
+  @doc """
+  The document counts of `_cat/indices` rows. `docs.count` is a string in
+  the JSON form, and is missing for a closed index, which is left out, as
+  hidden (`.`-prefixed) indices are. It counts Lucene documents, nested
+  ones included, so it estimates an index's top-level document count from
+  above.
+  """
+  def doc_counts(indices) do
+    for %{"index" => index} = row <- indices,
+        not String.starts_with?(index, "."),
+        count = parse_count(row["docs.count"]),
+        count != nil,
+        into: %{},
+        do: {{nil, index}, count}
+  end
+
+  defp parse_count(count) when is_integer(count), do: count
+
+  defp parse_count(count) when is_binary(count) do
+    case Integer.parse(count) do
+      {n, ""} -> n
+      _ -> nil
+    end
+  end
+
+  defp parse_count(_count), do: nil
+
   def get_index_mapping(base_url, index, opts \\ []) do
     case Client.get_mapping(base_url, index, opts) do
       {:ok, mapping} ->

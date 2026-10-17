@@ -30,6 +30,12 @@ defmodule Lotus.Elasticsearch.Integration.IntrospectionTest do
     assert "age" in column_names
   end
 
+  test "table_row_estimates returns each index's document count", %{adapter: adapter} do
+    {:ok, estimates} = Adapter.table_row_estimates(adapter.state, [])
+    assert is_integer(estimates[{nil, Fixtures.users_index()}])
+    refute Enum.any?(estimates, fn {{nil, index}, _} -> String.starts_with?(index, ".") end)
+  end
+
   test "list_schemas returns empty", %{adapter: adapter} do
     assert {:ok, []} = Adapter.list_schemas(adapter.state)
   end
