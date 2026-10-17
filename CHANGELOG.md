@@ -15,7 +15,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   can tell large indices from small ones. The count includes nested
   documents, so it overestimates top-level documents. Closed and hidden
   indices are left out. This requires the Lotus that adds the callback
-  (elixir-lotus/lotus#320); until that is released, the dependency points
+  (elixir-lotus/lotus#324); until that is released, the dependency points
   at Lotus on GitHub.
 
 - **One Finch per adapter with a pool per source URL.** The adapter

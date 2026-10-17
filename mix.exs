@@ -37,7 +37,7 @@ defmodule Lotus.Elasticsearch.MixProject do
   defp deps do
     [
       # table_row_estimates/2 is not in a Lotus release yet: it comes with
-      # elixir-lotus/lotus#320. Point at main once it merges, then back to
+      # elixir-lotus/lotus#324. Point at main once it merges, then back to
       # "~> 1.3" once Lotus releases it.
       {:lotus, github: "elixir-lotus/lotus", branch: "claude/epic-ride-pku8a3"},
       {:req, "~> 0.5"},
