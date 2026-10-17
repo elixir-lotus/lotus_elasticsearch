@@ -16,7 +16,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   documents, so it overestimates top-level documents. Closed and hidden
   indices are left out. This requires the Lotus that adds the callback
   (elixir-lotus/lotus#324); until that is released, the dependency points
-  at Lotus on GitHub.
+  at Lotus `main` on GitHub.
 
 - **One Finch per adapter with a pool per source URL.** The adapter
   implements the Lotus source lifecycle callbacks: `shared_children/0`
