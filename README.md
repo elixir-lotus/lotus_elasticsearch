@@ -13,8 +13,8 @@ Add both `lotus` and `lotus_elasticsearch` to your `mix.exs`:
 ```elixir
 def deps do
   [
-    {:lotus, "~> 1.0"},
-    {:lotus_elasticsearch, "~> 0.1"}
+    {:lotus, "~> 1.3"},
+    {:lotus_elasticsearch, "~> 0.2"}
   ]
 end
 ```
