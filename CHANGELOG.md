@@ -5,7 +5,10 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.2.0] - 2026-10-17
+
+The adapter reports index sizes, which Lotus 1.3's AI assistant and MCP
+server show, and owns a Finch pool per source. Requires Lotus `~> 1.3`.
 
 ### Added
 
@@ -14,9 +17,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   and the MCP server's `list_tables` (`approx_rows`) show it, so a model
   can tell large indices from small ones. The count includes nested
   documents, so it overestimates top-level documents. Closed and hidden
-  indices are left out. This requires the Lotus that adds the callback
-  (elixir-lotus/lotus#324); until that is released, the dependency points
-  at Lotus `main` on GitHub.
+  indices are left out. This requires Lotus 1.3, which adds the callback
+  (elixir-lotus/lotus#324).
 
 - **One Finch per adapter with a pool per source URL.** The adapter
   implements the Lotus source lifecycle callbacks: `shared_children/0`
