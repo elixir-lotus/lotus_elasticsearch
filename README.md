@@ -190,6 +190,12 @@ Unit tests run without a cluster. The tests under `test/integration/` need the d
 
 - [Writing Queries](guides/writing-queries.md) — the statement format, variables and optional clauses, and exactly how filters, sorts and pagination rewrite the query body.
 
+## Contributing
+
+See [CONTRIBUTING.md](https://github.com/elixir-lotus/lotus_elasticsearch/blob/main/CONTRIBUTING.md): when a change needs an issue
+first, and what a pull request needs. Report a security problem
+privately, as [SECURITY.md](https://github.com/elixir-lotus/lotus_elasticsearch/blob/main/SECURITY.md) says.
+
 ## License
 
 MIT — see [LICENSE](https://github.com/elixir-lotus/lotus_elasticsearch/blob/main/LICENSE).

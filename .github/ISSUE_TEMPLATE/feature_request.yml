@@ -1,0 +1,39 @@
+name: Feature request
+description: An idea, or a change to what Lotus Elasticsearch does.
+labels: [enhancement]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for the idea. A change of behaviour or a new feature is agreed here before a pull request (see CONTRIBUTING.md). The README's "What this adapter cannot do" lists what is left out on purpose.
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: The problem
+      description: What you are trying to do, for whom, and what stops you today.
+    validations:
+      required: true
+
+  - type: textarea
+    id: proposal
+    attributes:
+      label: What you propose
+      description: How it would look to an app (a config key, a query option, a statement shape) and what the adapter would send to the cluster. Say if it changes what the adapter does today, and if it works on both Elasticsearch and OpenSearch.
+    validations:
+      required: true
+
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: What else you considered
+      description: Other designs, and what you do today instead.
+
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Checks
+      options:
+        - label: I searched the open and closed issues.
+          required: true
+        - label: I would like to make the pull request myself.

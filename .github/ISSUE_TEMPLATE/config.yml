@@ -1,0 +1,14 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Report a security vulnerability
+    url: https://github.com/elixir-lotus/lotus_elasticsearch/security/advisories/new
+    about: Report a security problem privately, not in a public issue.
+  - name: Documentation
+    url: https://hexdocs.pm/lotus_elasticsearch
+    about: Configuring a source, writing queries, visibility and what the adapter cannot do.
+  - name: A problem in Lotus itself
+    url: https://github.com/elixir-lotus/lotus/issues
+    about: Lotus core has its own issue tracker.
+  - name: A problem in the Lotus web UI
+    url: https://github.com/elixir-lotus/lotus_web/issues
+    about: lotus_web has its own issue tracker.

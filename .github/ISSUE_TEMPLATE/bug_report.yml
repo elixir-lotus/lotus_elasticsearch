@@ -1,0 +1,111 @@
+name: Bug report
+description: Something in Lotus Elasticsearch does not work as the docs say.
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for the report. A security problem goes to a private report instead (see SECURITY.md).
+
+  - type: input
+    id: lotus_elasticsearch
+    attributes:
+      label: lotus_elasticsearch version
+      description: From `mix.lock`, or `mix deps | grep lotus_elasticsearch`.
+      placeholder: "0.2.0"
+    validations:
+      required: true
+
+  - type: input
+    id: lotus
+    attributes:
+      label: Lotus version
+      description: And `lotus_web`, if the problem shows in the web UI.
+      placeholder: "lotus 1.3.0, lotus_web 1.3.0"
+    validations:
+      required: true
+
+  - type: input
+    id: elixir
+    attributes:
+      label: Elixir and OTP versions
+      placeholder: "Elixir 1.20.1, OTP 29"
+    validations:
+      required: true
+
+  - type: dropdown
+    id: engine
+    attributes:
+      label: Search engine
+      options:
+        - Elasticsearch
+        - OpenSearch
+        - A managed service (say which below)
+    validations:
+      required: true
+
+  - type: input
+    id: server_version
+    attributes:
+      label: Server version
+      description: The `version.number` from `GET /` on the cluster, and the service if it is managed (Elastic Cloud, Amazon OpenSearch Service, ...).
+      placeholder: "OpenSearch 2.18.0"
+    validations:
+      required: true
+
+  - type: input
+    id: http_client
+    attributes:
+      label: Req and Finch versions
+      description: The HTTP client the adapter uses, from `mix.lock`.
+      placeholder: "req 0.7.5, finch 0.24.0"
+    validations:
+      required: true
+
+  - type: dropdown
+    id: config
+    attributes:
+      label: How the source is configured
+      options:
+        - A client module (use Lotus.Elasticsearch)
+        - An inline map (adapter: :elasticsearch)
+        - An inline map (adapter: Lotus.Source.Adapters.Elasticsearch)
+    validations:
+      required: true
+
+  - type: textarea
+    id: query
+    attributes:
+      label: The query
+      description: The statement, the variables, and the options it ran with (`:index`, filters, sorts, pagination). Leave out credentials and private data; the smallest index mapping that shows it helps.
+      render: elixir
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: What you expected
+    validations:
+      required: true
+
+  - type: textarea
+    id: actual
+    attributes:
+      label: What happened
+      description: The error and its stacktrace, or the error body the cluster returned, or the wrong result.
+      render: text
+    validations:
+      required: true
+
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Checks
+      options:
+        - label: I use a release from Hex, not `main`.
+          required: true
+        - label: I searched the open and closed issues.
+          required: true
+        - label: I removed credentials and private data from what I pasted.
+          required: true
