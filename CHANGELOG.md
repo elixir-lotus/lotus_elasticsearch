@@ -5,6 +5,18 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+
+- **The `:index` option can only name indices.** It went into the request
+  path unchecked, so a value such as `"x/_delete_by_query?q=*&"` reached
+  another API than `_search` or `_mapping`, one that can write. A value
+  with `/`, `\`, `?`, `#`, `%`, `"`, `<`, `>`, `|` or a space is now
+  refused before any request, with an error that names it. Wildcards,
+  lists, `_all` and remote clusters still pass; date math
+  (`<logs-{now/d}>`) no longer does.
+
 ## [0.2.0] - 2026-10-17
 
 The adapter reports index sizes, which Lotus 1.3's AI assistant and MCP
