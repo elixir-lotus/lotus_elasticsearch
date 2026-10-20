@@ -93,4 +93,4 @@ rest.
 ## License
 
 By contributing, you agree that your contribution is released under the
-MIT License of the project (see [LICENSE](LICENSE)).
+MIT License of the project (see [LICENSE](https://github.com/elixir-lotus/lotus_elasticsearch/blob/main/LICENSE)).
