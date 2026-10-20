@@ -32,18 +32,46 @@ defmodule Lotus.Elasticsearch.Client do
   end
 
   def search(base_url, index, query, opts \\ []) do
-    case request(:post, base_url, "/#{index}/_search", Keyword.merge(opts, json: query)) do
-      {:ok, %{body: body}} -> {:ok, body}
-      error -> error
+    with :ok <- check_target(index),
+         {:ok, %{body: body}} <-
+           request(:post, base_url, "/#{index}/_search", Keyword.merge(opts, json: query)) do
+      {:ok, body}
     end
   end
 
   def get_mapping(base_url, index, opts \\ []) do
-    case request(:get, base_url, "/#{index}/_mapping", opts) do
-      {:ok, %{body: body}} -> {:ok, body}
-      error -> error
+    with :ok <- check_target(index),
+         {:ok, %{body: body}} <- request(:get, base_url, "/#{index}/_mapping", opts) do
+      {:ok, body}
     end
   end
+
+  @doc """
+  Checks an index, or a list or pattern of them, before it goes into a
+  request's path.
+
+  A character that ends the path segment (`/`, `?`, `#`), escapes it
+  (`%`, `\\`) or is never in an index name would let the value reach
+  another API than the one the adapter calls, such as
+  `"x/_delete_by_query?q=*&"`, so such a value is refused before any
+  request. Wildcards (`logs-*`), lists (`a,b`), `_all` and remote
+  clusters (`cluster:index`) pass. Date math (`<logs-{now/d}>`) does not.
+  """
+  def check_target(index) when is_binary(index) do
+    cond do
+      index in ["", ".", ".."] ->
+        {:error, "invalid index: #{inspect(index)}"}
+
+      String.match?(index, ~r{[/\\?#%"<>|[:space:][:cntrl:]]}u) ->
+        {:error,
+         "invalid index: #{inspect(index)}, which cannot contain / \\ ? # % \" < > | or a space"}
+
+      true ->
+        :ok
+    end
+  end
+
+  def check_target(index), do: {:error, "invalid index: #{inspect(index)}, not a string"}
 
   def list_indices(base_url, opts \\ []) do
     case request(:get, base_url, "/_cat/indices?format=json&h=index,health,docs.count", opts) do
