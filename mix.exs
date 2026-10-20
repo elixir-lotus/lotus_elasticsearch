@@ -63,7 +63,13 @@ defmodule Lotus.Elasticsearch.MixProject do
     [
       main: "readme",
       source_ref: "v#{@version}",
-      extras: ["README.md", "guides/writing-queries.md", "CHANGELOG.md", "CONTRIBUTING.md", "SECURITY.md"],
+      extras: [
+        "README.md",
+        "guides/writing-queries.md",
+        "CHANGELOG.md",
+        "CONTRIBUTING.md",
+        "SECURITY.md"
+      ],
       groups_for_modules: [
         Adapter: [
           Lotus.Elasticsearch,
