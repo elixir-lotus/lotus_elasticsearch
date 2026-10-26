@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **A form that connects an Elasticsearch or OpenSearch source from the
+  app.** With Lotus v2, `Lotus.Source.Connections.kinds/0` lists
+  `"elasticsearch"` with a URL, user and password, so a host or Lotus Pro can
+  let people connect a cluster without a client module in the config. A
+  failed health check now reads as the cluster's error
+  (`Elasticsearch Error (401): …`) rather than the raw response. Lotus v1
+  ignores the form.
+
 ### Fixed
 
 - **The `:index` option can only name indices.** It went into the request

@@ -74,6 +74,42 @@ defmodule Lotus.Source.Adapters.Elasticsearch do
   def can_handle?(%{adapter: :elasticsearch}), do: true
   def can_handle?(_), do: false
 
+  # Lotus v2 connects a source from settings a person types
+  # (`Lotus.Source.Connections`): a cluster's URL, and a user and password
+  # when it asks for them. Lotus v1 has no such behaviour.
+  if Code.ensure_loaded?(Lotus.Source.Adapter.Connection) do
+    @behaviour Lotus.Source.Adapter.Connection
+
+    @impl Lotus.Source.Adapter.Connection
+    def connection do
+      %{
+        kind: "elasticsearch",
+        label: "Elasticsearch",
+        fields: [
+          %{
+            key: :url,
+            label: "URL",
+            type: :string,
+            required: true,
+            placeholder: "https://search.internal:9200",
+            hint: "An OpenSearch cluster works too."
+          },
+          %{key: :username, label: "User", type: :string},
+          %{key: :password, label: "Password", type: :secret}
+        ]
+      }
+    end
+
+    @impl Lotus.Source.Adapter.Connection
+    def from_settings(_name, settings) do
+      url = settings[:url]
+
+      if String.starts_with?(url, ["http://", "https://"]),
+        do: {:ok, settings |> Map.new() |> Map.put(:adapter, :elasticsearch)},
+        else: {:error, %{url: "Use an http:// or https:// address."}}
+    end
+  end
+
   @impl true
   def wrap(name, entry) when is_atom(entry) do
     config = entry.config()
@@ -367,6 +403,7 @@ defmodule Lotus.Source.Adapters.Elasticsearch do
   def health_check(state) do
     case Client.request(:get, state.url, "/", state.http_opts) do
       {:ok, _} -> :ok
+      {:error, %{status: _, body: _} = error} -> {:error, format_error(state, error)}
       {:error, reason} -> {:error, reason}
     end
   end
