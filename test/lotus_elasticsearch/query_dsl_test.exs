@@ -134,4 +134,66 @@ defmodule Lotus.Elasticsearch.QueryDSLTest do
       assert get_in(result, ["query", "term", "name"]) == "{{other}}"
     end
   end
+
+  describe "substitute_variable/3 on text" do
+    test "binds a bare placeholder to the value's JSON literal" do
+      text = ~S|{"size": {{n}}, "query": {"terms": {"tag": {{tags}}}}}|
+
+      bound =
+        text
+        |> QueryDSL.substitute_variable("n", 5)
+        |> QueryDSL.substitute_variable("tags", ["a", "b"])
+
+      assert Lotus.JSON.decode!(bound) == %{
+               "size" => 5,
+               "query" => %{"terms" => %{"tag" => ["a", "b"]}}
+             }
+    end
+
+    test "binds a string that is only the placeholder to the literal" do
+      text = ~S|{"query": {"range": {"age": {"gte": "{{min_age}}"}}}}|
+
+      assert QueryDSL.substitute_variable(text, "min_age", 18) ==
+               ~S|{"query": {"range": {"age": {"gte": 18}}}}|
+    end
+
+    test "splices the value's text into a longer string, escaped" do
+      text = ~S|{"query": {"wildcard": {"name": "*{{q}}*"}}}|
+
+      assert QueryDSL.substitute_variable(text, "q", ~S|a"b\c|) ==
+               ~S|{"query": {"wildcard": {"name": "*a\"b\\c*"}}}|
+
+      assert QueryDSL.substitute_variable(text, "q", 7) ==
+               ~S|{"query": {"wildcard": {"name": "*7*"}}}|
+    end
+
+    test "a value cannot leave its string or literal" do
+      text = ~S|{"query": {"term": {"name": "{{q}}"}}, "size": {{n}}}|
+      evil = ~S|x"}}, "script": {"source": "1|
+
+      bound =
+        text |> QueryDSL.substitute_variable("q", evil) |> QueryDSL.substitute_variable("n", evil)
+
+      assert %{"query" => %{"term" => %{"name" => ^evil}}, "size" => ^evil} =
+               Lotus.JSON.decode!(bound)
+    end
+
+    test "leaves other placeholders, and keys and escaped quotes, as they are" do
+      text = ~S|{"{{field}}": "\"{{q}}\" {{other}}", "size": {{other}}}|
+
+      assert QueryDSL.substitute_variable(text, "q", "v") ==
+               ~S|{"{{field}}": "\"v\" {{other}}", "size": {{other}}}|
+    end
+  end
+
+  describe "neutralize/1" do
+    test "binds every placeholder to null so the template parses" do
+      text = ~S|{"size": {{n}}, "query": {"term": {"a": "{{a}}", "b": "x{{b}}"}}}|
+
+      assert Lotus.JSON.decode!(QueryDSL.neutralize(text)) == %{
+               "size" => nil,
+               "query" => %{"term" => %{"a" => nil, "b" => "x"}}
+             }
+    end
+  end
 end

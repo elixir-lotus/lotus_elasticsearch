@@ -4,7 +4,7 @@
 
 A Lotus statement here is an Elasticsearch Query DSL JSON object rather than SQL text. Variables, optional clauses, filters, sorts and pagination all rewrite that object structurally — see [Writing Queries](guides/writing-queries.md).
 
-> **0.1.0 — first release.** The adapter is complete against the Lotus v1 `Lotus.Source.Adapter` contract and its test suite runs against a live cluster, but its own surface — the client macro, the config shape, the index and field mapping, the type mapping — has no production users yet and may still move. Pin accordingly.
+> **Early releases.** The adapter is complete against the Lotus v2 `Lotus.Source.Adapter` contract and its test suite runs against a live cluster, but its own surface — the client macro, the config shape, the index and field mapping, the type mapping — has no production users yet and may still move. Pin accordingly.
 
 ## Installation
 
@@ -13,11 +13,15 @@ Add both `lotus` and `lotus_elasticsearch` to your `mix.exs`:
 ```elixir
 def deps do
   [
-    {:lotus, "~> 1.3"},
-    {:lotus_elasticsearch, "~> 0.2"}
+    {:lotus, "~> 2.0"},
+    {:lotus_elasticsearch, "~> 0.3"}
   ]
 end
 ```
+
+The adapter follows Lotus v2. Until Lotus 2.0 is on Hex, `main` of this
+repository depends on Lotus `main` from GitHub, as Lotus Web does; use
+`0.2` with Lotus `~> 1.3`.
 
 Requires Elixir 1.18 or later. CI runs the suite on Elixir 1.18, 1.19 and 1.20 against OpenSearch 2.18.
 
@@ -134,7 +138,9 @@ Two consequences worth knowing before you build on this:
 
 - **Query execution** against `_search`, with `_source` fields plus `_id` and `_index` flattened into columns. Object and array values are JSON-encoded into the cell.
 - **Filters, sorts and pagination** rewrite the query body rather than wrapping it in SQL-shaped subqueries: filters become `bool.filter` clauses (`term`, `terms`, `range`, `wildcard`, `exists`), sorts become a `sort` array, pagination becomes `from`/`size`. Supported filter operators are `:eq`, `:neq`, `:gt`, `:gte`, `:lt`, `:lte`, `:like`, `:is_null`, `:is_not_null`, `:in`; core raises `Lotus.UnsupportedOperatorError` on anything else rather than degrading silently.
-- **`{{var}}` substitution** with JSON-literal escaping. This is the adapter's injection boundary: the value is run through `Lotus.JSON.encode!/1` and the encoded literal replaces the marker, so a string stays a quoted JSON string, a number or boolean sheds its quotes, and a list becomes a JSON array. `[[ ... ]]` optional clauses work too, on the raw text before parsing. See [Writing Queries](guides/writing-queries.md) for the rules — in particular that every `{{var}}` must sit inside JSON string quotes.
+- **`{{var}}` substitution** with JSON-literal escaping. This is the adapter's injection boundary: the value is run through `Lotus.JSON.encode!/1` and the encoded literal replaces the marker, so a string stays a quoted JSON string, a number or boolean sheds its quotes, and a list becomes a JSON array. A placeholder can stand bare where a value goes (`"size": {{n}}`), be a whole string (`"{{status}}"`), or sit inside a longer string (`"*{{q}}*"`, where the value's text is spliced in, escaped). `[[ ... ]]` optional clauses work too, on the raw text before parsing. See [Writing Queries](guides/writing-queries.md) for the rules.
+- **Read-only by construction.** The adapter only ever calls `_search` (and `_validate/query`, `_mapping` and `_cat/indices` to describe the cluster), so no statement can write: `Lotus.writes?/2` is always `false` for an Elasticsearch source, and the per-source `read_only` setting changes nothing for it.
+- **Stop a running search.** The adapter declares `Lotus.Source.Adapter.Cancel`: each search is sent with an `X-Opaque-Id` header, and `Lotus.cancel/1` (Lotus Web's Stop button) cancels the task that carries it through the tasks API. A user needs the `cluster:manage` privilege (or `cancel_task`) on a secured cluster.
 - **Exact counts in one round-trip.** When the caller asks for `count: :exact`, `apply_pagination/3` adds `"track_total_hits": true` to the body and `execute_query/4` reads `hits.total.value` back out — Lotus core's "Strategy A", so there is no second count query. Without that flag the adapter deliberately reports no total, because Elasticsearch caps its default estimate at 10 000 and returns a `gte` relation that is not a trustworthy number.
 - **Schema introspection** — `_cat/indices` lists indices (dot-prefixed system indices are filtered out), `_mapping` describes an index's fields. Every field is reported as nullable with no default, and `_id` is flagged as the primary key. `list_schemas/1` returns `[]` and the hierarchy label is `"Indices"`: Elasticsearch has no namespace level above the index.
 - **Pre-execution validation.** `validate_statement/3` strips `[[ ]]` blocks, neutralizes unbound `{{var}}` markers to `null`, and posts the body to `_validate/query?explain=false`.

@@ -10,9 +10,9 @@ defmodule Lotus.Source.Adapters.Elasticsearch.EditorConfigTest do
 
     test "populates keywords, types, functions, and context_boundaries" do
       cfg = EditorConfig.config()
-      assert is_list(cfg.keywords) and cfg.keywords != []
-      assert is_list(cfg.types) and cfg.types != []
-      assert is_list(cfg.functions) and cfg.functions != []
+      assert [_ | _] = cfg.keywords
+      assert [_ | _] = cfg.types
+      assert [_ | _] = cfg.functions
       assert is_list(cfg.context_boundaries)
     end
   end

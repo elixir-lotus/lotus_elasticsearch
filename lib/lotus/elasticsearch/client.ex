@@ -87,6 +87,7 @@ defmodule Lotus.Elasticsearch.Client do
     |> maybe_add_json(opts[:json])
     |> maybe_add_auth(opts[:username], opts[:password])
     |> maybe_add_receive_timeout(opts[:receive_timeout])
+    |> maybe_add_opaque_id(opts[:opaque_id])
     |> maybe_add_finch(Process.whereis(@finch))
   end
 
@@ -101,6 +102,9 @@ defmodule Lotus.Elasticsearch.Client do
 
   defp maybe_add_receive_timeout(opts, nil), do: opts
   defp maybe_add_receive_timeout(opts, timeout), do: Keyword.put(opts, :receive_timeout, timeout)
+
+  defp maybe_add_opaque_id(opts, nil), do: opts
+  defp maybe_add_opaque_id(opts, id), do: Keyword.put(opts, :headers, [{"x-opaque-id", id}])
 
   defp maybe_add_finch(opts, nil), do: opts
   defp maybe_add_finch(opts, _pid), do: Keyword.put(opts, :finch, @finch_option)

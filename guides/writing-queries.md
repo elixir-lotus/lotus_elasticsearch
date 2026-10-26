@@ -35,24 +35,28 @@ Because `:params` is never used — values are inlined into the body — the ada
 
 Lotus's `{{var_name}}` syntax works, with one rule that has no SQL equivalent.
 
-### Every `{{var}}` must sit inside JSON string quotes
+### Where a `{{var}}` can go
 
-Variables are substituted one at a time, and each substitution round-trips the body through JSON. A template is only parseable if it is valid JSON *before* any value is bound, so a bare `{{min_age}}` in value position would make the template unparseable. Write it quoted:
+Lotus reads the statement with its JSON lexical profile (`Lotus.Query.Tokenizer`), as it does to find the variables, so the template does not have to be valid JSON until every variable is bound. A placeholder can be:
 
-```json
-{ "query": { "range": { "age": { "gte": "{{min_age}}" } } } }
-```
+- **bare, where a value goes**: `"size": {{limit}}`, `"terms": {"tag": {{tags}}}`;
+- **a whole string**: `"gte": "{{min_age}}"`, the form that keeps the template valid JSON, which tools that parse it (a JSON formatter, `validate_statement/3` before binding) prefer;
+- **inside a longer string**: `"wildcard": {"name": "*{{q}}*"}`.
 
 ### Substitution inlines a JSON literal
 
-`substitute_variable/5` encodes the value with `Lotus.JSON.encode!/1` and splices the encoded literal in. It replaces `"{{var}}"` — marker *including* the surrounding quotes — before it replaces a bare `{{var}}`, which is how a quoted placeholder ends up holding a non-string value:
+`substitute_variable/5` encodes the value with `Lotus.JSON.encode!/1`. A bare placeholder and a string that is only the placeholder (`"{{var}}"`, quotes included) become the encoded literal, which is how a quoted placeholder ends up holding a non-string value. Inside a longer string the value's text is spliced in, escaped for the string, so it stays inside it:
 
 | Template fragment | Value | Result |
 |---|---|---|
 | `{"term": {"status": "{{status}}"}}` | `"active"` | `{"term": {"status": "active"}}` |
 | `{"range": {"age": {"gte": "{{min_age}}"}}}` | `18` | `{"range": {"age": {"gte": 18}}}` |
+| `{"range": {"age": {"gte": {{min_age}}}}}` | `18` | `{"range": {"age": {"gte": 18}}}` |
 | `{"term": {"active": "{{flag}}"}}` | `true` | `{"term": {"active": true}}` |
 | `{"terms": {"tag": "{{tags}}"}}` | `["a", "b"]` | `{"terms": {"tag": ["a", "b"]}}` |
+| `{"wildcard": {"name": "*{{q}}*"}}` | `"a\"b"` | `{"wildcard": {"name": "*a\\"b*"}}` |
+
+A placeholder in a key works the same way (`{"{{field}}": ...}`).
 
 List variables take the same path — `substitute_list_variable/5` delegates to `substitute_variable/5`, and `supports_feature?(state, :arrays)` is `true`, so a list binds as one JSON array rather than being expanded into N placeholders.
 
@@ -66,24 +70,24 @@ A marker whose variable is not being substituted on this pass is left exactly as
 
 ### Optional clauses
 
-`[[ ... ]]` blocks work, because Lotus applies them to the raw statement text before the adapter ever sees it — a block whose variables have no value (missing, `nil`, or `""`) is dropped entirely; otherwise the brackets are removed and the content kept. Since this is a plain text operation, the block has to be written so that both outcomes leave valid JSON. In practice that means bracketing a whole array element, comma included:
+`[[ ... ]]` blocks work, because Lotus applies them to the raw statement text before the adapter ever sees it — a block whose variables have no value (missing, `nil`, or `""`) is dropped entirely; otherwise the brackets are removed and the content kept. Since this is a plain text operation, the block has to be written so that both outcomes leave valid JSON, comma included.
+
+Lotus v2 reads `[[` as a block only where no single `[` is open, so that a nested array such as `"coordinates": [[1, 2], [3, 4]]` stays an array. A block therefore works as a member of an object outside any array, not as an element of an array. Put an optional clause in a `bool` key of its own:
 
 ```json
 {
   "query": {
     "bool": {
-      "filter": [
-        { "term": { "status": "{{status}}" } }
-        [[, { "range": { "age": { "gte": "{{min_age}}" } } }]]
-      ]
+      "filter": [{ "term": { "status": "{{status}}" } }]
+      [[, "must": { "range": { "age": { "gte": {{min_age}} } } }]]
     }
   }
 }
 ```
 
-With `min_age` supplied, the second clause stays. Without it, the block vanishes and the array is still well-formed.
+With `min_age` supplied, the `must` clause stays. Without it, the block vanishes and the object is still well-formed. Each of `must`, `should`, `must_not` and `filter` can hold one such clause, and a `bool` inside it more.
 
-`validate_statement/3` and `prepare_for_analysis/2` both inspect a statement without binding values, so they strip the brackets unconditionally and neutralize every remaining `{{var}}` to `null` — the JSON-native analogue of SQL's `NULL` — before parsing.
+`validate_statement/3` and `prepare_for_analysis/2` both inspect a statement without binding values, so they strip the brackets unconditionally and neutralize every remaining `{{var}}` to `null` — the JSON-native analogue of SQL's `NULL` — before parsing (a placeholder inside a longer string becomes empty text).
 
 ## How the pipeline rewrites the body
 
@@ -156,6 +160,12 @@ An empty hit list gives `{[], []}` — no columns, no rows.
 ### Aggregations
 
 Aggregations are **not usable in 0.1.0**. The adapter carries a conversion path — a bucket aggregation becomes one row per bucket with the bucket's keys as columns, and metric aggregations become a single row with one column per named aggregation, unwrapping `{"value": v}` — but a real `_search` response always carries `hits.total`, including when you set `"size": 0`, and the hits branch claims the response before the aggregation branch is reached. An aggregation query currently returns an empty result rather than its buckets.
+
+## Read-only and stopping a search
+
+The adapter calls `_search` and nothing that writes, so every statement is read-only whatever the source's `read_only` setting, and `Lotus.writes?/2` says `false`.
+
+It declares `Lotus.Source.Adapter.Cancel`. Before a search, `cancel_handle/1` makes an id that `execute_query/4` sends as the `X-Opaque-Id` header; `Lotus.cancel/1` lists the search tasks (`GET /_tasks?actions=*search*`) and cancels the one with that header (`POST /_tasks/<task>/_cancel`), and Elasticsearch stops its shard tasks with it. On a secured cluster the source's user needs the privilege to list and cancel tasks (`cluster:monitor/tasks/lists` and `cluster:admin/tasks/cancel`, both in `manage`). A cancel that comes before the cluster lists the search, or after it returned, finds nothing; Lotus asks again while the statement runs.
 
 ## Validating before running
 

@@ -6,6 +6,9 @@ defmodule Lotus.Elasticsearch.QueryDSL do
   # decoding string queries to maps on the way in (via `ensure_map/1`) and
   # encoding to JSON on the way out to the HTTP client.
 
+  alias Lotus.Query.Tokenizer
+  alias Lotus.Query.Tokenizer.Profile
+
   @doc "Parse a JSON string into a map, or return the map unchanged."
   def ensure_map(query) when is_map(query), do: {:ok, query}
 
@@ -37,16 +40,106 @@ defmodule Lotus.Elasticsearch.QueryDSL do
     Map.merge(query_map, %{"from" => offset, "size" => limit})
   end
 
-  @doc "Replace `{{var_name}}` occurrences anywhere in the map with the JSON-encoded value."
+  @language "json:elasticsearch"
+
+  @doc "The lexical profile Lotus reads an Elasticsearch statement with."
+  def profile, do: Profile.for_language(@language)
+
+  @doc """
+  Bind `{{var_name}}` to `value`.
+
+  A text body is read with `Lotus.Query.Tokenizer` and the JSON profile,
+  as Lotus core reads it to find the variables, so the template need not
+  be valid JSON until every variable is bound:
+
+    * a bare `{{var}}` in code (`"size": {{n}}`) and a string that is only
+      the placeholder (`"{{var}}"`) become the value's JSON literal, so a
+      number stays a number and a list an array;
+    * a placeholder inside a longer string (`"*{{q}}*"`) becomes the
+      value's text, escaped for the string.
+
+  A map body (already decoded) can only hold placeholders in strings.
+  """
+  def substitute_variable(text, var_name, value) when is_binary(text) do
+    bind(text, fn
+      ^var_name -> {:ok, value}
+      _other -> :skip
+    end)
+  end
+
   def substitute_variable(query_map, var_name, value) when is_map(query_map) do
-    encoded = Lotus.JSON.encode!(value)
-    marker = "{{#{var_name}}}"
-    # Round-trip through JSON to substitute in string leaves only.
     query_map
     |> Lotus.JSON.encode!()
-    |> String.replace("\"#{marker}\"", encoded)
-    |> String.replace(marker, encoded)
+    |> substitute_variable(var_name, value)
     |> Lotus.JSON.decode!()
+  end
+
+  @doc """
+  Bind every placeholder of `text` to `null`, so the template parses
+  without values. A placeholder inside a longer string becomes empty text.
+  """
+  def neutralize(text) when is_binary(text), do: bind(text, fn _name -> {:ok, nil} end)
+
+  defp bind(text, fun) do
+    text
+    |> Tokenizer.tokenize(profile())
+    |> bind_tokens(fun)
+    |> Tokenizer.to_string()
+  end
+
+  defp bind_tokens(tokens, fun) do
+    Enum.map(tokens, fn
+      {:variable, name, _raw} = token ->
+        case fun.(name) do
+          {:ok, value} -> {:code, Lotus.JSON.encode!(value)}
+          :skip -> token
+        end
+
+      {:string, raw} ->
+        bind_string(raw, fun)
+
+      {:block, inner} ->
+        {:block, bind_tokens(inner, fun)}
+
+      token ->
+        token
+    end)
+  end
+
+  defp bind_string(raw, fun) do
+    whole =
+      case Tokenizer.variables([{:string, raw}]) do
+        [name] -> if raw == ~s("{{#{name}}}"), do: name
+        _ -> nil
+      end
+
+    with name when is_binary(name) <- whole,
+         {:ok, value} <- fun.(name) do
+      {:code, Lotus.JSON.encode!(value)}
+    else
+      _ ->
+        [{:string, bound}] =
+          Tokenizer.replace_variables([{:string, raw}], &string_replacement(&1, fun))
+
+        {:string, bound}
+    end
+  end
+
+  defp string_replacement(name, fun) do
+    case fun.(name) do
+      {:ok, value} -> string_text(value)
+      :skip -> "{{#{name}}}"
+    end
+  end
+
+  # The value as the content of a JSON string: its text, escaped, without
+  # the quotes.
+  defp string_text(nil), do: ""
+
+  defp string_text(value) do
+    text = if is_binary(value), do: value, else: Lotus.JSON.encode!(value)
+    encoded = Lotus.JSON.encode!(text)
+    binary_part(encoded, 1, byte_size(encoded) - 2)
   end
 
   # --- Private ---

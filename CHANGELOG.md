@@ -7,7 +7,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Breaking Changes
+
+- **Requires Lotus v2.** Lotus v2 split the adapter behaviour into a core
+  behaviour and capability behaviours, and calls a capability only when the
+  adapter declares it. The adapter now declares
+  `Lotus.Source.Adapter.Introspection`, `Preflight`, `Binding`, `Shaping`,
+  `Editor`, `Connection` and `Cancel`, so it no longer compiles against
+  Lotus 1.x. Until Lotus 2.0 is on Hex it depends on Lotus `main` from
+  GitHub, as Lotus Web does. Use `0.2` with Lotus `~> 1.3`.
+
 ### Added
+
+- **Stop a running search.** `Lotus.cancel/1`, and Lotus Web's Stop button,
+  cancel the search on the cluster: each search carries an `X-Opaque-Id`,
+  and the adapter cancels the task with that header through the tasks API.
+  `Lotus.cancellable?/1` is `true` for an Elasticsearch source.
+- **A `{{var}}` can stand bare where a value goes**, as in `"size": {{n}}`
+  or `"terms": {"tag": {{tags}}}`. It binds to the value's JSON literal, as
+  `"{{n}}"` does.
 
 - **A form that connects an Elasticsearch or OpenSearch source from the
   app.** With Lotus v2, `Lotus.Source.Connections.kinds/0` lists
@@ -18,6 +36,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   ignores the form.
 
 ### Fixed
+
+- **A `{{var}}` inside a longer string binds.** `"*{{q}}*"` raised a JSON
+  decode error when the query ran; the value's text is now spliced into the
+  string, escaped.
+- **Validation reads variables and optional blocks as Lotus does.**
+  `validate_statement/3` and `prepare_for_analysis/2` found `{{var}}` and
+  `[[ ]]` with SQL's lexical rules, where `\"` ends a quoted name, so in
+  `"say \"hi [[x]]\""` the brackets were stripped from the string. They now
+  use the JSON profile of `Lotus.Query.Tokenizer`, as the rest of the
+  pipeline does.
 
 - **The `:index` option can only name indices.** It went into the request
   path unchecked, so a value such as `"x/_delete_by_query?q=*&"` reached
