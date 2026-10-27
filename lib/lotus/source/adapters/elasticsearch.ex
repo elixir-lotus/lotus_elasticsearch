@@ -39,6 +39,13 @@ defmodule Lotus.Source.Adapters.Elasticsearch do
   """
 
   @behaviour Lotus.Source.Adapter
+  @behaviour Lotus.Source.Adapter.Introspection
+  @behaviour Lotus.Source.Adapter.Preflight
+  @behaviour Lotus.Source.Adapter.Binding
+  @behaviour Lotus.Source.Adapter.Shaping
+  @behaviour Lotus.Source.Adapter.Editor
+  @behaviour Lotus.Source.Adapter.Connection
+  @behaviour Lotus.Source.Adapter.Cancel
 
   alias Lotus.Elasticsearch.Client
   alias Lotus.Elasticsearch.Introspection
@@ -48,7 +55,6 @@ defmodule Lotus.Source.Adapters.Elasticsearch do
   alias Lotus.Query.Statement
   alias Lotus.Source.Adapter, as: AdapterStruct
   alias Lotus.Source.Adapters.Elasticsearch.EditorConfig
-  alias Lotus.Variables
 
   @source_type :elasticsearch
   @language "json:elasticsearch"
@@ -60,7 +66,9 @@ defmodule Lotus.Source.Adapters.Elasticsearch do
   @default_connect_timeout 5_000
   @default_receive_timeout 15_000
 
-  @lifecycle_callbacks? {:shared_children, 0} in Lotus.Source.Adapter.behaviour_info(:callbacks)
+  # Where `cancel_handle/1` leaves the id of the search about to run, for
+  # `execute_query/4` in the same process to send as `X-Opaque-Id`.
+  @opaque_id_key {__MODULE__, :opaque_id}
 
   # ---------------------------------------------------------------------------
   # Pluggable registration
@@ -74,40 +82,36 @@ defmodule Lotus.Source.Adapters.Elasticsearch do
   def can_handle?(%{adapter: :elasticsearch}), do: true
   def can_handle?(_), do: false
 
-  # Lotus v2 connects a source from settings a person types
+  # A source connected from settings a person types
   # (`Lotus.Source.Connections`): a cluster's URL, and a user and password
-  # when it asks for them. Lotus v1 has no such behaviour.
-  if Code.ensure_loaded?(Lotus.Source.Adapter.Connection) do
-    @behaviour Lotus.Source.Adapter.Connection
+  # when it asks for them.
+  @impl Lotus.Source.Adapter.Connection
+  def connection do
+    %{
+      kind: "elasticsearch",
+      label: "Elasticsearch",
+      fields: [
+        %{
+          key: :url,
+          label: "URL",
+          type: :string,
+          required: true,
+          placeholder: "https://search.internal:9200",
+          hint: "An OpenSearch cluster works too."
+        },
+        %{key: :username, label: "User", type: :string},
+        %{key: :password, label: "Password", type: :secret}
+      ]
+    }
+  end
 
-    @impl Lotus.Source.Adapter.Connection
-    def connection do
-      %{
-        kind: "elasticsearch",
-        label: "Elasticsearch",
-        fields: [
-          %{
-            key: :url,
-            label: "URL",
-            type: :string,
-            required: true,
-            placeholder: "https://search.internal:9200",
-            hint: "An OpenSearch cluster works too."
-          },
-          %{key: :username, label: "User", type: :string},
-          %{key: :password, label: "Password", type: :secret}
-        ]
-      }
-    end
+  @impl Lotus.Source.Adapter.Connection
+  def from_settings(_name, settings) do
+    url = settings[:url]
 
-    @impl Lotus.Source.Adapter.Connection
-    def from_settings(_name, settings) do
-      url = settings[:url]
-
-      if String.starts_with?(url, ["http://", "https://"]),
-        do: {:ok, settings |> Map.new() |> Map.put(:adapter, :elasticsearch)},
-        else: {:error, %{url: "Use an http:// or https:// address."}}
-    end
+    if String.starts_with?(url, ["http://", "https://"]),
+      do: {:ok, settings |> Map.new() |> Map.put(:adapter, :elasticsearch)},
+      else: {:error, %{url: "Use an http:// or https:// address."}}
   end
 
   @impl true
@@ -142,6 +146,7 @@ defmodule Lotus.Source.Adapters.Elasticsearch do
       },
       source_type: @source_type
     }
+    |> AdapterStruct.with_capabilities()
   end
 
   defp build_http_opts(nil, _password, receive_timeout), do: [receive_timeout: receive_timeout]
@@ -158,8 +163,10 @@ defmodule Lotus.Source.Adapters.Elasticsearch do
   def execute_query(state, text, _params, opts) do
     index = Keyword.get(opts, :index, "_all")
 
+    http_opts = with_opaque_id(http_opts(state, opts), Process.delete(@opaque_id_key))
+
     with {:ok, query_map} <- QueryDSL.ensure_map(text),
-         {:ok, response} <- Client.search(state.url, index, query_map, http_opts(state, opts)) do
+         {:ok, response} <- Client.search(state.url, index, query_map, http_opts) do
       {columns, rows} = hits_to_tabular(response)
       result = %{columns: columns, rows: rows, num_rows: length(rows)}
 
@@ -179,6 +186,68 @@ defmodule Lotus.Source.Adapters.Elasticsearch do
     end
   rescue
     e -> {:error, Exception.message(e)}
+  end
+
+  defp with_opaque_id(http_opts, nil), do: http_opts
+  defp with_opaque_id(http_opts, id), do: Keyword.put(http_opts, :opaque_id, id)
+
+  # ---------------------------------------------------------------------------
+  # Cancel
+  # ---------------------------------------------------------------------------
+
+  @doc """
+  Names the search about to run with a fresh `X-Opaque-Id`.
+
+  Lotus calls it in the process that runs the statement, just before
+  `execute_query/4`, which sends the id as the search's `X-Opaque-Id`
+  header. Elasticsearch and OpenSearch keep that header on the search's
+  task, which is how `cancel/2` finds it.
+  """
+  @impl Lotus.Source.Adapter.Cancel
+  def cancel_handle(_state) do
+    id = "lotus-" <> Base.url_encode64(:crypto.strong_rand_bytes(12), padding: false)
+    Process.put(@opaque_id_key, id)
+    {:ok, id}
+  end
+
+  @doc """
+  Cancels the search task that carries the handle as `X-Opaque-Id`: lists
+  the search tasks (`GET /_tasks?actions=*search*`), and cancels the one
+  with the header (`POST /_tasks/<task>/_cancel`), which cancels its shard
+  tasks with it.
+
+  A search only shows in the tasks API once the cluster has it, so a cancel
+  that comes before then, or after the search returned, finds nothing. It
+  is still `:ok`: Lotus asks again while the statement has not returned.
+  """
+  @impl Lotus.Source.Adapter.Cancel
+  def cancel(state, id) when is_binary(id) do
+    case Client.request(:get, state.url, "/_tasks?actions=*search*", state.http_opts) do
+      {:ok, %{body: %{"nodes" => nodes}}} ->
+        nodes |> search_tasks(id) |> Enum.reduce_while(:ok, &cancel_task(state, &1, &2))
+
+      {:ok, _other} ->
+        {:error, "The cluster did not list its tasks"}
+
+      {:error, error} ->
+        {:error, format_error(state, error)}
+    end
+  end
+
+  # The ids of the top-level tasks that carry `id` as `X-Opaque-Id`.
+  defp search_tasks(nodes, id) do
+    for {_node, %{"tasks" => tasks}} <- nodes,
+        {task_id, task} <- tasks,
+        get_in(task, ["headers", "X-Opaque-Id"]) == id,
+        not Map.has_key?(task, "parent_task_id"),
+        do: task_id
+  end
+
+  defp cancel_task(state, task_id, :ok) do
+    case Client.request(:post, state.url, "/_tasks/#{task_id}/_cancel", state.http_opts) do
+      {:ok, _} -> {:cont, :ok}
+      {:error, error} -> {:halt, {:error, format_error(state, error)}}
+    end
   end
 
   @impl true
@@ -279,11 +348,15 @@ defmodule Lotus.Source.Adapters.Elasticsearch do
   end
 
   @impl true
-  def substitute_variable(_state, %Statement{} = statement, var_name, value, _type) do
-    with {:ok, query_map} <- QueryDSL.ensure_map(statement.body) do
-      {:ok, %{statement | body: QueryDSL.substitute_variable(query_map, var_name, value)}}
-    end
+  def substitute_variable(_state, %Statement{body: body} = statement, var_name, value, _type)
+      when is_binary(body) or is_map(body) do
+    {:ok, %{statement | body: QueryDSL.substitute_variable(body, var_name, value)}}
+  rescue
+    e in JSON.DecodeError -> {:error, "Invalid JSON: #{Exception.message(e)}"}
   end
+
+  def substitute_variable(_state, %Statement{}, _var_name, _value, _type),
+    do: {:error, "Query must be a JSON object or string"}
 
   @impl true
   def substitute_list_variable(state, %Statement{} = statement, var_name, values, type)
@@ -411,14 +484,12 @@ defmodule Lotus.Source.Adapters.Elasticsearch do
   @impl true
   def disconnect(_state), do: :ok
 
-  if @lifecycle_callbacks?, do: @impl(true)
-
+  @impl true
   def shared_children do
     [{Finch, name: Client.finch(), pools: %{default: [size: @default_pool_size]}}]
   end
 
-  if @lifecycle_callbacks?, do: @impl(true)
-
+  @impl true
   def source_started(_name, %{url: url, pool: pool}) do
     Finch.start_pool(Client.finch(), Finch.Pool.new(url),
       size: pool.size,
@@ -562,8 +633,8 @@ defmodule Lotus.Source.Adapters.Elasticsearch do
   # JSON-parsing. `null` is the JSON-native analogue of SQL's `NULL`.
   defp prepare_template(text) when is_binary(text) do
     text
-    |> OptionalClause.strip_brackets()
-    |> Variables.neutralize("null")
+    |> OptionalClause.strip_brackets(QueryDSL.profile())
+    |> QueryDSL.neutralize()
   end
 
   defp prepare_template(text), do: text

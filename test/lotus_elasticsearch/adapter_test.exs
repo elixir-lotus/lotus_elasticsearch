@@ -208,4 +208,64 @@ defmodule Lotus.Elasticsearch.AdapterTest do
       assert Enum.any?(ctx.error_patterns, &(&1.hint != ""))
     end
   end
+
+  describe "capabilities" do
+    test "declares every capability it implements, and cancel" do
+      caps = AdapterStruct.capabilities(Adapter)
+
+      for cap <- [:introspection, :preflight, :binding, :shaping, :editor, :connection, :cancel] do
+        assert cap in caps, "missing capability #{cap}"
+      end
+
+      refute :session in caps
+      refute :streaming in caps
+    end
+
+    test "wrap/2 fills the capabilities of the struct" do
+      adapter = Adapter.wrap("search", %{adapter: :elasticsearch, url: "http://localhost:9200"})
+      assert :cancel in adapter.capabilities
+    end
+  end
+
+  describe "read-only" do
+    test "a search never writes, so read_only does not change what sanitize_query takes" do
+      statement = %Statement{body: ~s({"query": {"match_all": {}}})}
+
+      assert :ok = Adapter.sanitize_query(nil, statement, read_only: true)
+      assert :ok = Adapter.sanitize_query(nil, statement, read_only: false)
+    end
+  end
+
+  describe "substitute_variable/5" do
+    test "binds a bare placeholder in a text body" do
+      statement = %Statement{body: ~s({"size": {{n}}})}
+
+      assert {:ok, %Statement{body: ~s({"size": 3})}} =
+               Adapter.substitute_variable(nil, statement, "n", 3, :integer)
+    end
+  end
+
+  describe "prepare_for_analysis/2" do
+    test "strips optional blocks and neutralizes placeholders into valid JSON" do
+      statement = %Statement{
+        body: ~s({"size": {{n}}, "query": {"term": {"a": "{{a}}"}} [[, "from": {{f}}]]})
+      }
+
+      assert {:ok, %Statement{body: body}} = Adapter.prepare_for_analysis(nil, statement)
+
+      assert Lotus.JSON.decode!(body) == %{
+               "size" => nil,
+               "query" => %{"term" => %{"a" => nil}},
+               "from" => nil
+             }
+    end
+  end
+
+  describe "cancel_handle/1" do
+    test "returns a fresh id and leaves it for the search about to run" do
+      assert {:ok, "lotus-" <> _ = id} = Adapter.cancel_handle(nil)
+      assert {:ok, other} = Adapter.cancel_handle(nil)
+      refute id == other
+    end
+  end
 end
