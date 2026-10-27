@@ -1,6 +1,7 @@
 defmodule Lotus.Elasticsearch.Integration.IntrospectionTest do
   use Lotus.Elasticsearch.Case, async: false
 
+  alias Lotus.Elasticsearch.Client
   alias Lotus.Elasticsearch.Test.Fixtures
   alias Lotus.Source.Adapters.Elasticsearch, as: Adapter
 
@@ -41,7 +42,7 @@ defmodule Lotus.Elasticsearch.Integration.IntrospectionTest do
   } do
     index = "#{@prefix}_nested"
 
-    Lotus.Elasticsearch.Client.request(:put, @base_url, "/#{index}",
+    Client.request(:put, @base_url, "/#{index}",
       json: %{
         mappings: %{
           properties: %{
