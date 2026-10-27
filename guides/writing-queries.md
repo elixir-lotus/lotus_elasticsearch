@@ -72,7 +72,24 @@ A marker whose variable is not being substituted on this pass is left exactly as
 
 `[[ ... ]]` blocks work, because Lotus applies them to the raw statement text before the adapter ever sees it — a block whose variables have no value (missing, `nil`, or `""`) is dropped entirely; otherwise the brackets are removed and the content kept. Since this is a plain text operation, the block has to be written so that both outcomes leave valid JSON, comma included.
 
-Lotus v2 reads `[[` as a block only where no single `[` is open, so that a nested array such as `"coordinates": [[1, 2], [3, 4]]` stays an array. A block therefore works as a member of an object outside any array, not as an element of an array. Put an optional clause in a `bool` key of its own:
+In an array, put the block after an item, its comma inside, so that dropping it leaves the array well-formed:
+
+```json
+{
+  "query": {
+    "bool": {
+      "filter": [
+        { "term": { "status": "{{status}}" } }
+        [[, { "range": { "age": { "gte": {{min_age}} } } }]]
+      ]
+    }
+  }
+}
+```
+
+With `min_age` supplied, the second clause stays. Without it, the block vanishes and the array is still well-formed.
+
+This needs a Lotus with elixir-lotus/lotus#393. Lotus 2.0's tokenizer at first read `[[` as a block only where no single `[` is open (a rule for SQL arrays), so inside a JSON array the block was two brackets. Lotus #393 reads `[[` right after a JSON value (`}`, `]`, `"`, a digit or a letter) as a block even there. At the start of an array's items (`[ [[ {…}, ]] {…} ]`), where a nested array such as `[[1, 2], [3, 4]]` could begin, `[[` is still brackets. With a Lotus that does not have it, or to write a block that never depends on it, make the clause a member of an object, outside any array:
 
 ```json
 {
@@ -85,7 +102,7 @@ Lotus v2 reads `[[` as a block only where no single `[` is open, so that a neste
 }
 ```
 
-With `min_age` supplied, the `must` clause stays. Without it, the block vanishes and the object is still well-formed. Each of `must`, `should`, `must_not` and `filter` can hold one such clause, and a `bool` inside it more.
+Each of `must`, `should`, `must_not` and `filter` can hold one such clause, and a `bool` inside it more.
 
 `validate_statement/3` and `prepare_for_analysis/2` both inspect a statement without binding values, so they strip the brackets unconditionally and neutralize every remaining `{{var}}` to `null` — the JSON-native analogue of SQL's `NULL` — before parsing (a placeholder inside a longer string becomes empty text).
 
