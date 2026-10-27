@@ -207,10 +207,14 @@ Those hints only reach the LLM prompt if you list the adapter in `config :lotus,
 Elasticsearch has no namespace above the index, so `list_schemas/1` returns `[]`, `resolve_table_namespace/3` returns `nil`, `supports_feature?(state, :schema_hierarchy)` is `false`, and the UI labels the level `"Indices"`.
 
 - **Indices** come from `/_cat/indices?format=json&h=index,health,docs.count`, with dot-prefixed system indices removed and the rest sorted. A failed request yields an empty list rather than an error, so an unreachable cluster shows as "no indices".
-- **Fields** come from `/<index>/_mapping`, read out of `mappings.properties`. Each field is reported with its mapping `type` (or `"object"` when the mapping declares none), `nullable: true`, no default, and `primary_key: true` only for `_id`. Nothing in a mapping expresses nullability or defaults, so those two are constants rather than facts about your data.
+- **Fields** come from `/<index>/_mapping`, read out of `mappings.properties`, sub-fields included. Each field is reported with its mapping `type` (or `"object"` when the mapping declares none), `nullable: true`, no default, and `primary_key: true` only for `_id`. Nothing in a mapping expresses nullability or defaults, so those two are constants rather than facts about your data.
 - **Types** are mapped to Lotus's own vocabulary for display and variable typing: the string family (`text`, `keyword`, `constant_keyword`, `wildcard`, `ip`, `geo_point`, `geo_shape`) to `:text`; the integer family (`long`, `integer`, `short`, `byte`, `unsigned_long`) to `:integer`; `double`, `float` and `half_float` to `:float`; `scaled_float` to `:decimal`; `boolean` to `:boolean`; `date` and `date_nanos` to `:datetime`; `object`, `nested` and `flattened` to `:json`; `binary` to `:binary`. Anything unrecognized falls back to `:text`.
 
-Note that the mapping is read one level deep. Sub-fields — the `.keyword` multi-field you will want for exact matching and sorting — are not listed, even though you can query them.
+Every field is listed by its path: an object's and a nested field's own fields (`address.city`, `lines.sku`) after it, and a field's multi-fields, such as the `.keyword` you will want for exact matching and sorting (`customer.keyword`), after the field.
+
+## In the editor
+
+`editor_config/1` hands Lotus Web the shape of a search request (`Lotus.Source.Adapters.Elasticsearch.EditorGrammar`, as the `:grammar` of the `:context_schema`): which keys each object takes, which take a field (and of which mapping types), an index, one of a set of values, or a query. The editor completes from it at every level (a `bool`'s clauses, an aggregation's types under its name, the date fields of a `date_histogram`) and warns about a key it does not know there.
 
 ## Further reading
 

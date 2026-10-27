@@ -1,6 +1,7 @@
 defmodule Lotus.Elasticsearch.Integration.IntrospectionTest do
   use Lotus.Elasticsearch.Case, async: false
 
+  alias Lotus.Elasticsearch.Client
   alias Lotus.Elasticsearch.Test.Fixtures
   alias Lotus.Source.Adapters.Elasticsearch, as: Adapter
 
@@ -34,6 +35,35 @@ defmodule Lotus.Elasticsearch.Integration.IntrospectionTest do
     {:ok, estimates} = Adapter.table_row_estimates(adapter.state, [])
     assert is_integer(estimates[{nil, Fixtures.users_index()}])
     refute Enum.any?(estimates, fn {{nil, index}, _} -> String.starts_with?(index, ".") end)
+  end
+
+  test "describe_table lists sub-fields, object and nested fields as dotted paths", %{
+    adapter: adapter
+  } do
+    index = "#{@prefix}_nested"
+
+    Client.request(:put, @base_url, "/#{index}",
+      json: %{
+        mappings: %{
+          properties: %{
+            customer: %{type: "text", fields: %{keyword: %{type: "keyword"}}},
+            address: %{properties: %{city: %{type: "keyword"}}},
+            lines: %{type: "nested", properties: %{sku: %{type: "keyword"}}}
+          }
+        }
+      }
+    )
+
+    {:ok, columns} = Adapter.describe_table(adapter.state, nil, index)
+
+    assert Enum.map(columns, &{&1.name, &1.type}) == [
+             {"address", "object"},
+             {"address.city", "keyword"},
+             {"customer", "text"},
+             {"customer.keyword", "keyword"},
+             {"lines", "nested"},
+             {"lines.sku", "keyword"}
+           ]
   end
 
   test "list_schemas returns empty", %{adapter: adapter} do
