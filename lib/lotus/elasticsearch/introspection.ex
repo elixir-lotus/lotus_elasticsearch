@@ -51,24 +51,40 @@ defmodule Lotus.Elasticsearch.Introspection do
 
   defp parse_count(_count), do: nil
 
+  @doc """
+  The fields of an index's mapping, with dotted paths: an object's or a
+  nested field's own fields (`address.city`), and a field's multi-fields
+  (`customer.keyword`), after the field they belong to.
+  """
   def get_index_mapping(base_url, index, opts \\ []) do
     case Client.get_mapping(base_url, index, opts) do
       {:ok, mapping} ->
-        properties = get_in(mapping, [index, "mappings", "properties"]) || %{}
-
-        Enum.map(properties, fn {field_name, field_def} ->
-          %{
-            name: field_name,
-            type: field_def["type"] || "object",
-            nullable: true,
-            default: nil,
-            primary_key: field_name == "_id"
-          }
+        mapping
+        |> get_in([index, "mappings", "properties"])
+        |> Kernel.||(%{})
+        |> flatten("")
+        |> Enum.map(fn {name, type} ->
+          %{name: name, type: type, nullable: true, default: nil, primary_key: name == "_id"}
         end)
-        |> Enum.sort_by(& &1.name)
 
       {:error, _} ->
         []
     end
   end
+
+  defp flatten(properties, prefix) when is_map(properties) do
+    properties
+    |> Enum.sort_by(fn {name, _def} -> name end)
+    |> Enum.flat_map(fn {name, definition} -> field(prefix <> name, definition) end)
+  end
+
+  defp flatten(_properties, _prefix), do: []
+
+  defp field(path, definition) when is_map(definition) do
+    [{path, definition["type"] || "object"}] ++
+      flatten(definition["fields"], path <> ".") ++
+      flatten(definition["properties"], path <> ".")
+  end
+
+  defp field(path, _definition), do: [{path, "object"}]
 end

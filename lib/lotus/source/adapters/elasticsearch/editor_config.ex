@@ -18,7 +18,9 @@ defmodule Lotus.Source.Adapters.Elasticsearch.EditorConfig do
       `bool` block, schema field names inside `match`/`term`/`range`,
       etc.; `:value_literals` enumerates fixed value-position
       completions (`"order" → ["asc", "desc"]`, calendar-interval
-      units, etc.).
+      units, etc.); `:grammar` is the whole request's shape, typed at
+      every level (`Lotus.Source.Adapters.Elasticsearch.EditorGrammar`),
+      which an editor that reads it prefers to the three above.
 
   ## Who consumes this
 
@@ -33,6 +35,8 @@ defmodule Lotus.Source.Adapters.Elasticsearch.EditorConfig do
   typespec of the returned map, and the `:context_schema` /
   `:dialect_spec` documentation there for the full contract.
   """
+
+  alias Lotus.Source.Adapters.Elasticsearch.EditorGrammar
 
   def config do
     %{
@@ -58,7 +62,8 @@ defmodule Lotus.Source.Adapters.Elasticsearch.EditorConfig do
     %{
       root: root_keys(),
       children: children_rules(),
-      value_literals: value_literals()
+      value_literals: value_literals(),
+      grammar: EditorGrammar.grammar()
     }
   end
 

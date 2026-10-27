@@ -19,6 +19,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **The shape of a search request, for the editor.** The editor config's
+  `:context_schema` has a `:grammar`
+  (`Lotus.Source.Adapters.Elasticsearch.EditorGrammar`): the keys of every
+  object of a search request, what each takes (a query, a field and its
+  mapping types, an index, one of a set of values, a number…), and a
+  snippet to insert, with the queries, aggregations and parameters most
+  used. Lotus Web completes from it at every level and warns about a key
+  it does not know there. The flat `:root`, `:children` and
+  `:value_literals` stay, for an editor that does not read it.
+- **Fields by their path.** `describe_table/3` lists an object's and a
+  nested field's own fields (`address.city`) and a field's multi-fields
+  (`customer.keyword`) after it, with their types, where it listed the
+  top-level fields only. The schema browser and the editor's completion
+  show them.
+
 - **Stop a running search.** `Lotus.cancel/1`, and Lotus Web's Stop button,
   cancel the search on the cluster: each search carries an `X-Opaque-Id`,
   and the adapter cancels the task with that header through the tasks API.
